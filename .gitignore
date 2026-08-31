@@ -1,5 +1,8 @@
 HELP.md
+
+### Build output ###
 target/
+out/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
@@ -31,3 +34,12 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### 日志 ###
+*.log
+logs/
+log/
+
+### 系统文件 ###
+.DS_Store
+Thumbs.db
