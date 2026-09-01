@@ -20,7 +20,7 @@ spring:
 
 mybatis-plus:
     mapper-locations: classpath*:/mapper/**/*.xml
-    type-aliases-package: com.czlr.orangemarketbackend.**.entity
+    type-aliases-package: com.czlr.orangemarketbackend.entity.po
     configuration:
       map-underscore-to-camel-case: true
     global-config:
