@@ -5,8 +5,9 @@ import lombok.Data;
 
 @Data
 @AllArgsConstructor
-public class CaptchaDTO {
-    private String image;
-
+public class SmsRequest {
+    private String phone;
+    private String purpose;
     private String captchaKey;
+    private String captchaCode;
 }
