@@ -44,7 +44,6 @@ log/
 .DS_Store
 Thumbs.db
 ### 文档 ###
-API_DOCUMENTATION.md
 DATABASE_DESIGN.md
 
 改动记录.md

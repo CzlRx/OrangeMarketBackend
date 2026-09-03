@@ -23,5 +23,6 @@ public class UserAccount extends BaseEntity {
     private Integer gender;
     private LocalDate birthday;
     private CommonStatus status;
+    private String role;
     private LocalDateTime lastLoginAt;
 }

@@ -3,6 +3,7 @@ package com.czlr.orangemarketbackend.common.exception;
 import com.czlr.orangemarketbackend.common.Result;
 import com.czlr.orangemarketbackend.common.ResultCode;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.shiro.authz.UnauthorizedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -26,6 +27,13 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleBusinessException(BusinessException e) {
         log.warn("业务异常: code={}, message={}", e.getResultCode().getCode(), e.getMessage());
         return build(e.getResultCode(), e.getMessage());
+    }
+
+    /** Shiro 角色或权限校验失败：转换为统一的 403 业务响应 */
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<Result<Void>> handleUnauthorizedException(UnauthorizedException e) {
+        BusinessException businessException = new BusinessException(ResultCode.FORBIDDEN);
+        return handleBusinessException(businessException);
     }
 
     /** 参数校验失败：@Valid 校验不通过 */
