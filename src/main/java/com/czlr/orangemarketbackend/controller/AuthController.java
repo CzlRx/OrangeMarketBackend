@@ -3,6 +3,7 @@ package com.czlr.orangemarketbackend.controller;
 
 import com.czlr.orangemarketbackend.common.Result;
 import com.czlr.orangemarketbackend.entity.dto.*;
+import com.czlr.orangemarketbackend.entity.po.UserAccount;
 import com.czlr.orangemarketbackend.service.AuthService;
 import org.springframework.web.bind.annotation.*;
 
@@ -32,6 +33,20 @@ public class AuthController {
     public Result<LoginDTO> login(@RequestBody LoginRequest loginRequest){
         LoginDTO login = authService.login(loginRequest);
         return Result.success(login);
+    }
+
+    @DeleteMapping("/logout")
+    public Result<Void> logout(@RequestAttribute("sessionId") String sessionId,
+                               @RequestAttribute("userId") Long userId){
+        authService.logout(sessionId,userId);
+        return Result.success();
+    }
+
+    @GetMapping("/me")
+    public Result<UserAccount> getMe(@RequestAttribute("sessionId") String sessionId,
+                                     @RequestAttribute("userId") Long userId){
+        UserAccount userInfo = authService.getMe(sessionId, userId);
+        return Result.success(userInfo);
     }
 
 }

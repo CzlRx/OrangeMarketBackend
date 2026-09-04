@@ -11,6 +11,7 @@ import org.apache.shiro.web.mgt.DefaultWebSecurityManager;
 import org.springframework.aop.framework.autoproxy.DefaultAdvisorAutoProxyCreator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 
 import java.util.LinkedHashMap;
@@ -29,13 +30,15 @@ import java.util.Map;
 public class ShiroConfig {
 
     private final JwtUtil jwtUtil;
-    private final RedisTemplate<String, String> redisTemplate;
+    private final RedisTemplate<String, Object> redisTemplate;
     private final ShiroRealm shiroRealm;
 
     /**
      * 构造函数：注入 JWT 工具类和 Redis 模板
      */
-    public ShiroConfig(JwtUtil jwtUtil, RedisTemplate<String, String> redisTemplate, ShiroRealm shiroRealm) {
+    public ShiroConfig(JwtUtil jwtUtil,
+                       @Qualifier("redisTemplate") RedisTemplate<String, Object> redisTemplate,
+                       ShiroRealm shiroRealm) {
         this.jwtUtil = jwtUtil;
         this.redisTemplate = redisTemplate;
         this.shiroRealm = shiroRealm;
@@ -110,7 +113,13 @@ public class ShiroConfig {
         Map<String, String> filterChainDefinitionMap = new LinkedHashMap<>();
 
         // 1. 认证相关接口不需要登录（匿名访问）
-        filterChainDefinitionMap.put("/api/auth/**", "anon");
+        filterChainDefinitionMap.put("/api/auth/login", "anon");
+        filterChainDefinitionMap.put("/api/auth/sms/send", "anon");
+        filterChainDefinitionMap.put("/api/auth/captcha", "anon");
+
+        filterChainDefinitionMap.put("/api/categories", "anon");
+        filterChainDefinitionMap.put("/api/products", "anon");
+        filterChainDefinitionMap.put("/api/products/**", "anon");
 
         // 2. 其他所有 /api/** 接口都需要 JWT 认证
         filterChainDefinitionMap.put("/api/**", "statelessAuth");

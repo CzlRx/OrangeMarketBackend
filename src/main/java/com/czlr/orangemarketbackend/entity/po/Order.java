@@ -24,6 +24,13 @@ public class Order extends AuditableEntity {
     private BigDecimal shippingAmount;
     private BigDecimal totalAmount;
     private String buyerRemark;
+    private String receiver;
+    private String receiverPhone;
+    private String province;
+    private String city;
+    private String district;
+    private String detail;
+    private String paymentMethod;
     private LocalDateTime paymentExpireAt;
     private LocalDateTime paidAt;
     private LocalDateTime shippedAt;
@@ -31,4 +38,5 @@ public class Order extends AuditableEntity {
     private LocalDateTime completedAt;
     private LocalDateTime cancelledAt;
     private String cancelReason;
+    private String trackingNo;
 }

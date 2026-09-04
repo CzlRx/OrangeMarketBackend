@@ -10,6 +10,7 @@ import org.apache.shiro.authz.AuthorizationInfo;
 import org.apache.shiro.authz.SimpleAuthorizationInfo;
 import org.apache.shiro.realm.AuthorizingRealm;
 import org.apache.shiro.subject.PrincipalCollection;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.data.redis.core.RedisTemplate;
 
@@ -21,9 +22,10 @@ import java.util.Set;
 public class ShiroRealm extends AuthorizingRealm {
 
     private final UserAccountMapper userAccountMapper;
-    private final RedisTemplate<String, String> redisTemplate;
+    private final RedisTemplate<String, Object> redisTemplate;
 
-    public ShiroRealm(UserAccountMapper userAccountMapper, RedisTemplate<String, String> redisTemplate) {
+    public ShiroRealm(UserAccountMapper userAccountMapper,
+                      @Qualifier("redisTemplate") RedisTemplate<String, Object> redisTemplate) {
         this.userAccountMapper = userAccountMapper;
         this.redisTemplate = redisTemplate;
         setAuthenticationCachingEnabled(false);

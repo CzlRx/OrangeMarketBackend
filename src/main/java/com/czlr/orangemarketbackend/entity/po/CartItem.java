@@ -15,7 +15,6 @@ import lombok.NoArgsConstructor;
 public class CartItem extends AuditableEntity {
     private Long userId;
     private Long productId;
-    private Long seckillActivityId;
     private Integer quantity;
     private Integer selected;
 }

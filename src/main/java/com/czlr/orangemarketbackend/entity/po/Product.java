@@ -20,9 +20,13 @@ public class Product extends BaseEntity {
     private String name;
     private String subtitle;
     private String description;
+    private String coverImage;
+    private String imagesJson;
+    private String videoUrl;
     private BigDecimal salePrice;
     private BigDecimal originalPrice;
     private BigDecimal shippingFee;
+    private Integer stock;
     private Integer salesCount;
     private BigDecimal ratingAvg;
     private Integer reviewCount;

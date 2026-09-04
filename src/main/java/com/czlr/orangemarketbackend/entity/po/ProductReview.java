@@ -15,13 +15,10 @@ import lombok.NoArgsConstructor;
 @TableName("product_review")
 public class ProductReview extends AuditableEntity {
     private Long productId;
-    private Long orderId;
     private Long orderItemId;
     private Long userId;
+    private Integer rating;
     private String content;
-    private Integer qualityScore;
-    private Integer serviceScore;
-    private Integer logisticsScore;
     private Integer anonymous;
     private ReviewStatus status;
 }

@@ -6,6 +6,7 @@ import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.apache.shiro.mgt.SecurityManager;
 import org.apache.shiro.subject.SimplePrincipalCollection;
 import org.apache.shiro.subject.Subject;
@@ -31,13 +32,14 @@ import org.springframework.data.redis.core.RedisTemplate;
 public class StatelessAuthFilter extends AccessControlFilter {
 
     private final JwtUtil jwtUtil;
-    private final RedisTemplate<String, String> redisTemplate;
+    private final RedisTemplate<String, Object> redisTemplate;
     private final SecurityManager securityManager;
 
     /**
      * 构造函数：注入 JWT 工具类和 Redis 模板
      */
-    public StatelessAuthFilter(JwtUtil jwtUtil, RedisTemplate<String, String> redisTemplate,
+    public StatelessAuthFilter(JwtUtil jwtUtil,
+                               @Qualifier("redisTemplate") RedisTemplate<String, Object> redisTemplate,
                                SecurityManager securityManager) {
         this.jwtUtil = jwtUtil;
         this.redisTemplate = redisTemplate;

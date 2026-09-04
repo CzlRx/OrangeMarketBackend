@@ -17,12 +17,9 @@ import java.math.BigDecimal;
 public class OrderItem extends TimestampedEntity {
     private Long orderId;
     private Long productId;
-    private Long seckillActivityId;
     private String productName;
     private String productImage;
     private BigDecimal unitPrice;
     private Integer quantity;
     private BigDecimal lineAmount;
-    private BigDecimal shippingFee;
-    private Integer isSeckill;
 }

@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.czlr.orangemarketbackend.common.ResultCode;
+import com.czlr.orangemarketbackend.common.enums.CommonStatus;
+import com.czlr.orangemarketbackend.common.enums.ValueEnumUtils;
 import com.czlr.orangemarketbackend.common.exception.BusinessException;
 import com.czlr.orangemarketbackend.entity.dto.*;
 import com.czlr.orangemarketbackend.entity.po.UserAccount;
@@ -12,6 +14,7 @@ import com.czlr.orangemarketbackend.mapper.UserAccountMapper;
 import com.czlr.orangemarketbackend.utils.JwtUtil;
 import com.czlr.orangemarketbackend.utils.AuthRedisKey;
 import com.google.code.kaptcha.Producer;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -31,7 +34,7 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
 
-    private final RedisTemplate<String, String> redisTemplate;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     private final Producer captchaProducer;
 
@@ -39,7 +42,9 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
 
     private final JwtUtil jwtUtil;
 
-    public AuthService(RedisTemplate<String, String> redisTemplate, Producer captchaProducer, UserAccountMapper userAccountMapper, JwtUtil jwtUtil) {
+    public AuthService(
+            @Qualifier("redisTemplate") RedisTemplate<String, Object> redisTemplate,
+            Producer captchaProducer, UserAccountMapper userAccountMapper, JwtUtil jwtUtil) {
         this.redisTemplate = redisTemplate;
         this.captchaProducer = captchaProducer;
         this.userAccountMapper = userAccountMapper;
@@ -71,7 +76,7 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
     }
 
     public SmsInfo sendSms(SmsRequest smsRequest){
-        String s = redisTemplate.opsForValue().get("auth:captcha:" + smsRequest.getCaptchaKey());
+        String s = (String) redisTemplate.opsForValue().get("auth:captcha:" + smsRequest.getCaptchaKey());
         if(s == null){
             throw new BusinessException(ResultCode.NOT_FOUND,"图形验证码已过期");
         }else {
@@ -113,7 +118,7 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
             // 2. 生成 sessionId（用于 Redis 存储）
             String sessionId = UUID.randomUUID().toString();
             boolean isNewUser;
-            Map<String, String> map = new HashMap<>();
+            Map<String, Object> map = new HashMap<>();
             ObjectMapper objectMapper = new ObjectMapper();
             LambdaQueryWrapper<UserAccount> lambdaQueryWrapper = new LambdaQueryWrapper<>();
             lambdaQueryWrapper.eq(UserAccount::getPhone,loginRequest.getPhone());
@@ -136,12 +141,13 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
                 save(userAccount1);
                 map = objectMapper.convertValue(userAccount1, Map.class);
                 isNewUser = true;
+                userAccount = userAccount1;
             }
 
             // 4. 将用户信息存入 Redis
             // Redis key 格式：auth:login:{userId}{sessionId}
             // 存储格式：Hash（方便单独更新某个字段）
-            Long userId = userAccount != null ? userAccount.getId() : Long.parseLong(map.get("id"));
+            Long userId = userAccount.getId();
             String redisKey = AuthRedisKey.login(userId, sessionId);
             redisTemplate.opsForHash().putAll(redisKey, toRedisHash(map));
             redisTemplate.expire(redisKey, 86400, TimeUnit.SECONDS);  // 24 小时过期
@@ -172,10 +178,44 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
     }
 
     public boolean checkSms(String smscode){
-        String s = redisTemplate.opsForValue().get("auth:sms:" + smscode);
+        String s = (String) redisTemplate.opsForValue().get("auth:sms:" + smscode);
         if(s == null){
             throw new BusinessException(ResultCode.SMS_CODE_INVALID);
         }
         return true;
+    }
+
+    public UserAccount getMe(String sessionId, Long userId) {
+        // 1. 从 Redis 中获取用户信息
+        String redisKey = AuthRedisKey.login(userId, sessionId);
+        Map<Object, Object> userInfoMap = redisTemplate.opsForHash().entries(redisKey);
+
+        if (userInfoMap == null || userInfoMap.isEmpty()) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "未登录或会话已过期");
+        }
+
+        // 2. 将 Map 转换为 UserAccount 对象
+        UserAccount userAccount = new UserAccount();
+        userInfoMap.forEach((key, value) -> {
+            switch (key.toString()) {
+                case "id" -> userAccount.setId(Long.parseLong(value.toString()));
+                case "phone" -> userAccount.setPhone(value.toString());
+                case "nickname" -> userAccount.setNickname(value.toString());
+                case "avatarUrl" -> userAccount.setAvatarUrl(value.toString());
+                case "gender" -> userAccount.setGender(Integer.parseInt(value.toString()));
+                case "birthday" -> userAccount.setBirthday(value == null ? null : java.time.LocalDate.parse(value.toString()));
+                case "status" -> userAccount.setStatus(value == null ? null : ValueEnumUtils.fromValue(CommonStatus.class,value.toString()));
+                case "role" -> userAccount.setRole(value.toString());
+                case "lastLoginAt" -> userAccount.setLastLoginAt(value == null ? null : java.time.LocalDateTime.parse(value.toString()));
+            }
+        });
+        return userAccount;
+    }
+
+
+    public void logout(String sessionId, Long userId) {
+        // 1. 删除 Redis 中的用户信息
+        String redisKey = AuthRedisKey.login(userId, sessionId);
+        redisTemplate.delete(redisKey);
     }
 }
