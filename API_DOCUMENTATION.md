@@ -2,67 +2,70 @@
 
 ## 1. 文档说明
 
-本文档根据当前前端项目的路由、TypeScript 类型、Zustand 状态、Axios 封装和 MSW Mock 接口整理，用于后端 Controller、Service、DTO 和接口联调开发。
+本文档对应数据库脚本 `sql/create_core_business_tables.sql`。脚本创建数据库 `orange_market_simple`，当前版本只围绕 C 端商城的核心流程设计：
 
-前端项目当前使用的 API 基地址为 `/api`，参考文件：
+- 手机号 + 短信验证码登录，首次登录自动创建用户
+- 分类和商品浏览
+- 游客本地购物车，登录后使用服务端购物车
+- 收货地址管理
+- 收藏、浏览足迹和搜索历史
+- 创建订单、模拟支付、确认收货
+- 商品评价
 
-- `OrangeMarketFrontend/src/lib/api.ts`
-- `OrangeMarketFrontend/src/mocks/handlers.ts`
-- `OrangeMarketFrontend/src/types.ts`
-- `OrangeMarketFrontend/src/store/useStore.ts`
+当前数据库共 11 张表：
 
-当前业务范围：
+- `user_account`
+- `product_category`
+- `product`
+- `cart_item`
+- `user_address`
+- `orders`
+- `order_item`
+- `product_review`
+- `user_favorite`
+- `user_browse_history`
+- `user_search_history`
 
-- 仅 C 端用户，不提供后台管理 API
-- 手机号 + 短信验证码登录，首次登录自动注册
-- 开发阶段短信验证码固定为 `123456`
-- 当前使用模拟支付，不接入真实支付渠道
-- 商品无 SKU 规格，一个商品对应一个库存单元
-- 不提供优惠券和发票功能
-- 商品、库存、秒杀活动等数据暂时通过 SQL 或数据库工具维护
+本版本暂不设计秒杀、优惠券、发票、SKU、售后退款、真实支付、独立物流、客服和媒体附件功能。
+
+本文档描述接口契约和业务规则，不代表所有接口已经完成 Controller、Service 和 Mapper 实现。
 
 ## 2. 全局约定
 
 ### 2.1 基础信息
 
-| 项目 | 约定 |
-| --- | --- |
-| Base URL | `/api` |
-| 数据格式 | `application/json` |
-| 字符集 | UTF-8 |
-| 时间格式 | ISO 8601，例如 `2026-08-31T12:30:00.000Z` |
-| ID 格式 | API 统一返回字符串，数据库内部可以使用 BIGINT |
-| 金额格式 | API 返回数字且保留两位小数，数据库使用 DECIMAL |
-| 分页页码 | 从 `1` 开始 |
-| 默认 pageSize | `12` |
-| 最大 pageSize | `50` |
+- Base URL：`/api`
+- 数据格式：`application/json`
+- 字符集：UTF-8
+- 时间格式：ISO 8601，例如 `2026-09-05T12:30:00.000Z`
+- ID：数据库使用 `BIGINT`，接口统一返回字符串
+- 金额：接口返回数字并保留两位小数，数据库使用 `DECIMAL(10,2)`
+- 分页页码从 `1` 开始
+- 默认 `pageSize` 为 `12`，最大为 `50`
 
 ### 2.2 请求头
 
-登录后请求需要携带：
+登录后请求携带：
 
 ```http
 Authorization: Bearer {token}
 Content-Type: application/json
 ```
 
-建议订单创建、支付和评价请求额外携带：
+本版本没有支付流水表和订单幂等记录表。订单创建时建议仍然携带客户端生成的请求 ID，服务端是否实现幂等由业务层决定：
 
 ```http
-Idempotency-Key: {client-generated-key}
 X-Request-Id: {request-id}
 ```
 
 ### 2.3 统一成功响应
-
-当前前端 Mock 使用以下格式，后端应保持一致：
 
 ```json
 {
   "code": 0,
   "message": "success",
   "data": {},
-  "timestamp": 1788179400000
+  "timestamp": 1788601800000
 }
 ```
 
@@ -70,32 +73,30 @@ X-Request-Id: {request-id}
 
 ```json
 {
-  "code": 40001,
-  "message": "短信验证码错误",
+  "code": 40000,
+  "message": "请求参数错误",
   "data": null,
-  "timestamp": 1788179400000
+  "timestamp": 1788601800000
 }
 ```
 
-HTTP 状态码和业务错误码同时使用：
+常用错误码：
 
-| HTTP 状态 | 业务错误码 | 说明 |
-| --- | --- | --- |
-| `400` | `40000` | 请求参数错误 |
-| `400` | `40001` | 验证码错误或已过期 |
-| `400` | `40002` | 手机号格式错误 |
-| `400` | `40003` | 短信发送过于频繁 |
-| `401` | `40100` | 未登录或 Token 无效 |
-| `403` | `40300` | 无权访问该资源 |
-| `404` | `40400` | 资源不存在 |
-| `409` | `40900` | 数据冲突、库存不足或重复操作 |
-| `422` | `42200` | 当前业务状态不允许此操作 |
-| `429` | `42900` | 请求频率过高 |
-| `500` | `50000` | 服务端异常 |
+- `40000`：请求参数错误
+- `40001`：短信验证码错误或已过期
+- `40002`：手机号格式错误
+- `40003`：短信发送过于频繁
+- `40100`：未登录或 Token 无效
+- `40300`：无权访问该资源
+- `40400`：资源不存在
+- `40900`：库存不足、重复操作或数据冲突
+- `42200`：当前业务状态不允许操作
+- `42900`：请求频率过高
+- `50000`：服务端异常
 
 ### 2.5 分页响应
 
-商品、评价、订单、足迹等列表统一返回：
+商品、评价、收藏、足迹和订单列表统一返回：
 
 ```json
 {
@@ -107,26 +108,33 @@ HTTP 状态码和业务错误码同时使用：
 }
 ```
 
-当前前端已经使用的商品列表格式至少需要包含 `list`、`total` 和 `hasMore`。
+## 3. 数据库与接口模型
 
-## 3. 核心数据结构
+### 3.1 用户 `user_account`
 
-### 3.1 用户 `User`
+数据库保存手机号、昵称、头像、性别、生日、状态和角色。验证码、登录 Token 和登录会话不落 MySQL，使用 Redis 保存。
+
+接口中的用户对象：
 
 ```json
 {
   "id": "10001",
-  "phone": "13800138000",
+  "phone": "13800138001",
   "nickname": "橙子同学",
-  "avatar": "https://example.com/avatar.png",
-  "gender": "保密",
-  "birthday": "1998-08-18"
+  "avatarUrl": "https://example.com/avatar.png",
+  "gender": 0,
+  "birthday": "1998-08-18",
+  "status": "active",
+  "role": "USER",
+  "lastLoginAt": "2026-09-05T12:30:00.000Z"
 }
 ```
 
-后端数据库字段 `avatar_url` 对外转换为 `avatar`。
+性别取值：`0` 保密、`1` 男、`2` 女。`deletedAt`、`createdAt` 和 `updatedAt` 默认作为数据库内部字段，不要求所有接口返回。
 
-### 3.2 分类 `Category`
+### 3.2 分类 `product_category`
+
+数据库字段 `icon_key` 对外转换为 `icon`，`is_virtual` 对外转换为 `isVirtual`。
 
 ```json
 {
@@ -139,9 +147,20 @@ HTTP 状态码和业务错误码同时使用：
 }
 ```
 
-`seckill` 可以作为 `isVirtual=true` 的虚拟分类，实际商品筛选依据是有效秒杀活动。
+当前初始化数据全部为普通分类，`isVirtual` 为 `false`。分类接口只返回 `status=active` 且未逻辑删除的数据。
 
-### 3.3 商品 `Product`
+### 3.3 商品 `product`
+
+数据库和接口字段映射：
+
+- `sale_price` -> `price`
+- `cover_image` 和 `images_json` -> `images`
+- `sales_count` -> `sales`
+- `rating_avg` -> `rating`
+- `tags_json` -> `tags`
+- `stock` -> `stock`
+
+商品对象：
 
 ```json
 {
@@ -157,68 +176,25 @@ HTTP 状态码和业务错误码同时使用：
   "originalPrice": 399.00,
   "stock": 120,
   "sales": 8420,
-  "rating": 4.9,
+  "rating": 4.90,
   "reviewCount": 86,
   "description": "商品详细描述",
   "shippingFee": 8.00,
-  "isSeckill": true,
-  "seckillPrice": 195.98,
-  "seckillStock": 100,
-  "seckillSold": 80,
-  "startTime": "2026-08-31T10:00:00.000Z",
-  "endTime": "2026-08-31T22:00:00.000Z",
-  "purchaseLimit": 1,
-  "tags": ["热卖", "秒杀"]
+  "tags": ["热卖", "舒适"]
 }
 ```
 
-字段说明：
+说明：
 
-- `price` 为当前普通售价
-- 秒杀进行中时，`seckillPrice` 为当前有效售价
-- `stock` 为普通商品可售库存
-- `seckillStock` 和 `seckillSold` 为当前秒杀活动展示数据
-- `rating`、`reviewCount` 和 `sales` 为商品展示用统计数据
-- `shippingFee` 为该商品固定运费
+- `images_json` 保存图片 URL 数组；为空时可以使用 `cover_image` 组装单元素数组
+- `tags_json` 保存标签字符串数组
+- 当前没有 SKU，一个商品对应一个价格和一个库存值
+- `status` 取值为 `draft`、`on_sale`、`off_sale`
+- 面向用户的商品列表和详情只返回 `on_sale` 商品
 
-### 3.4 评价 `Review`
+### 3.4 购物车 `cart_item`
 
-```json
-{
-  "id": "50001",
-  "productId": "20001",
-  "userName": "小橙子",
-  "avatar": "https://example.com/avatar.png",
-  "content": "质感比预期更好，物流也很快。",
-  "quality": 5,
-  "service": 5,
-  "logistics": 5,
-  "images": ["https://example.com/review-image.jpg"],
-  "anonymous": false,
-  "createdAt": "2026-08-30T12:30:00.000Z"
-}
-```
-
-匿名评价仍然返回评价数据，但 `userName` 应返回“匿名用户”，不能暴露真实昵称。
-
-### 3.5 地址 `Address`
-
-```json
-{
-  "id": "30001",
-  "receiver": "橙子同学",
-  "phone": "138****8000",
-  "province": "上海市",
-  "city": "上海市",
-  "district": "浦东新区",
-  "detail": "世纪大道 100 号橙子大厦 8 楼",
-  "isDefault": true
-}
-```
-
-手机号写入数据库时应保存完整值，响应给前端时脱敏。
-
-### 3.6 购物车商品 `CartItem`
+数据库只保存用户、商品、数量和选中状态。商品名称、图片、当前价格和运费由接口查询 `product` 后组装，不重复保存。
 
 ```json
 {
@@ -227,50 +203,132 @@ HTTP 状态码和业务错误码同时使用：
   "quantity": 2,
   "selected": true,
   "product": {},
-  "effectivePrice": 195.98,
+  "effectivePrice": 239.00,
   "shippingFee": 8.00
 }
 ```
 
-`product`、`effectivePrice` 和 `shippingFee` 是购物车接口返回的展示辅助字段，数据库不必重复存储商品名称和图片。
+同一用户和同一商品只能有一条购物车记录。游客购物车由前端本地保存，登录后通过合并接口写入数据库。
 
-### 3.7 订单 `Order`
+### 3.5 地址 `user_address`
+
+```json
+{
+  "id": "30001",
+  "receiver": "橙子同学",
+  "phone": "138****8001",
+  "provinceCode": "310000",
+  "province": "上海市",
+  "cityCode": "310100",
+  "city": "上海市",
+  "districtCode": "310115",
+  "district": "浦东新区",
+  "detail": "世纪大道 100 号橙子大厦 8 楼",
+  "isDefault": true
+}
+```
+
+数据库保存完整手机号，接口返回时脱敏。省、市、区编码可以为空，但名称不能为空。
+
+### 3.6 订单 `orders` 和订单商品 `order_item`
+
+新数据库将收货地址快照直接保存到 `orders`，不再单独创建订单地址表。订单商品名称、图片、单价和行金额保存到 `order_item`，用于保证历史订单不受商品修改影响。
+
+订单对象：
 
 ```json
 {
   "id": "60001",
-  "orderNo": "OM202608310001",
+  "orderNo": "OM202609050001",
   "status": "pending_payment",
   "items": [],
   "address": {},
-  "subtotal": 391.96,
+  "subtotal": 239.00,
   "shippingFee": 8.00,
-  "total": 399.96,
+  "total": 247.00,
   "buyerRemark": "请尽快发货",
-  "createdAt": "2026-08-31T12:30:00.000Z",
-  "expiresAt": "2026-08-31T13:00:00.000Z"
+  "paymentMethod": null,
+  "trackingNo": null,
+  "createdAt": "2026-09-05T12:30:00.000Z",
+  "paymentExpireAt": "2026-09-05T13:00:00.000Z",
+  "paidAt": null,
+  "shippedAt": null,
+  "receivedAt": null,
+  "completedAt": null,
+  "cancelledAt": null
 }
 ```
 
 订单状态：
 
-```text
-pending_payment    待付款
-pending_shipment   待发货
-pending_receipt    待收货
-pending_review     待评价
-completed          已完成
-cancelled          已取消
-refunding          退款中
-refunded           退款成功
+- `pending_payment`：待付款
+- `pending_shipment`：待发货
+- `pending_receipt`：待收货
+- `pending_review`：待评价
+- `completed`：已完成
+- `cancelled`：已取消
+
+订单明细对象：
+
+```json
+{
+  "id": "61001",
+  "productId": "20001",
+  "productName": "晨雾白跑鞋",
+  "productImage": "https://example.com/product-cover.jpg",
+  "unitPrice": 239.00,
+  "quantity": 1,
+  "lineAmount": 239.00
+}
 ```
+
+### 3.7 评价 `product_review`
+
+当前评价只使用一个 `rating` 字段，不拆分质量、服务和物流评分，也不支持评价媒体。
+
+```json
+{
+  "id": "50001",
+  "productId": "20001",
+  "userName": "小橙子",
+  "avatar": "https://example.com/avatar.png",
+  "content": "质感比预期更好，物流也很快。",
+  "rating": 5,
+  "anonymous": false,
+  "createdAt": "2026-09-05T12:30:00.000Z"
+}
+```
+
+匿名评价返回 `userName=匿名用户`，并且不返回真实头像。`rating` 范围为 `1` 到 `5`。
+
+评价汇总对象：
+
+```json
+{
+  "average": 4.90,
+  "reviewCount": 86,
+  "goodRate": 0.98,
+  "allCount": 86,
+  "goodCount": 82,
+  "mediumCount": 3,
+  "badCount": 1
+}
+```
+
+### 3.8 用户行为表
+
+- `user_favorite`：唯一约束为 `(user_id, product_id)`，重复收藏应保持幂等
+- `user_browse_history`：唯一约束为 `(user_id, product_id)`，重复浏览更新 `viewed_at`
+- `user_search_history`：唯一约束为 `(user_id, keyword)`，重复搜索更新 `searched_at`
+
+足迹接口不再返回 `priceAtView`、`hasPriceDrop` 等价格提醒字段。
 
 ## 4. 认证接口
 
 ### 4.1 获取图形验证码
 
 ```http
-POST /api/auth/captcha
+GET /api/auth/captcha
 ```
 
 是否需要登录：否。
@@ -282,15 +340,14 @@ POST /api/auth/captcha
   "code": 0,
   "message": "success",
   "data": {
-    "captchaId": "captcha-abc123",
-    "imageUrl": "data:image/svg+xml;base64,...",
-    "expiresIn": 300
+    "image": "data:image/png;base64,...",
+    "captchaKey": "captcha-abc123"
   },
-  "timestamp": 1788179400000
+  "timestamp": 1788601800000
 }
 ```
 
-开发阶段也可以继续由前端生成图形验证码，但正式接入后建议由服务端生成并保存答案摘要。
+图形验证码答案只保存到 Redis，不写入数据库。
 
 ### 4.2 发送短信验证码
 
@@ -298,13 +355,15 @@ POST /api/auth/captcha
 POST /api/auth/sms/send
 ```
 
+是否需要登录：否。
+
 请求体：
 
 ```json
 {
-  "phone": "13800138000",
+  "phone": "13800138001",
   "purpose": "login",
-  "captchaId": "captcha-abc123",
+  "captchaKey": "captcha-abc123",
   "captchaCode": "7K3M"
 }
 ```
@@ -314,23 +373,16 @@ POST /api/auth/sms/send
 ```json
 {
   "code": 0,
-  "message": "短信验证码已发送",
+  "message": "success",
   "data": {
     "cooldown": 60,
     "expiresIn": 300
   },
-  "timestamp": 1788179400000
+  "timestamp": 1788601800000
 }
 ```
 
-开发环境约定：短信验证码固定为 `123456`，但仍然需要校验手机号、图形验证码和 60 秒发送频率。
-
-Redis Key：
-
-```text
-orange:auth:sms:code:login:{phone}   TTL 300 秒
-orange:auth:sms:limit:login:{phone}  TTL 60 秒
-```
+开发阶段短信验证码固定为 `1234`，并且仍然需要校验手机号、图形验证码和发送频率。短信验证码只保存到 Redis，不创建短信日志表。
 
 ### 4.3 手机号登录或注册
 
@@ -338,14 +390,14 @@ orange:auth:sms:limit:login:{phone}  TTL 60 秒
 POST /api/auth/login
 ```
 
+是否需要登录：否。
+
 请求体：
 
 ```json
 {
-  "phone": "13800138000",
-  "smsCode": "123456",
-  "captchaId": "captcha-abc123",
-  "captchaCode": "7K3M"
+  "phone": "13800138001",
+  "smsCode": "1234"
 }
 ```
 
@@ -357,22 +409,16 @@ POST /api/auth/login
   "message": "success",
   "data": {
     "token": "token-value",
-    "expiresAt": "2026-09-07T12:30:00.000Z",
-    "isNewUser": true,
-    "user": {
-      "id": "10001",
-      "phone": "13800138000",
-      "nickname": "橙子用户8000",
-      "avatar": "https://example.com/avatar.png",
-      "gender": "保密",
-      "birthday": ""
-    }
+    "expiresAt": "2026-09-06T12:30:00.000Z",
+    "isNewUser": true
   },
-  "timestamp": 1788179400000
+  "timestamp": 1788601800000
 }
 ```
 
-手机号不存在时，在同一个事务中创建用户并登录。手机号已存在时直接登录。
+手机号不存在时创建 `user_account`，默认昵称为手机号后四位拼接生成的昵称，默认角色为 `USER`。手机号已存在时直接登录。
+
+登录会话保存到 Redis，Token 失效或退出登录后不能继续访问需要认证的接口。
 
 ### 4.4 获取当前用户
 
@@ -382,19 +428,19 @@ GET /api/auth/me
 
 是否需要登录：是。
 
-响应 `data` 为 `User` 对象。
+响应 `data` 为当前用户对象，字段参见 [3.1 用户](#31-用户-user_account)。
 
 ### 4.5 退出登录
 
 ```http
-POST /api/auth/logout
+DELETE /api/auth/logout
 ```
 
 是否需要登录：是。
 
-服务端删除或废弃当前 Redis Token。
+服务端删除当前 Redis 登录会话。
 
-## 5. 首页、分类与商品接口
+## 5. 分类与商品接口
 
 ### 5.1 获取分类
 
@@ -404,27 +450,9 @@ GET /api/categories
 
 是否需要登录：否。
 
-响应：
+响应 `data` 为分类对象数组，字段参见 [3.2 分类](#32-分类-product_category)。
 
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": [
-    {
-      "id": "10001",
-      "name": "数码",
-      "eyebrow": "SMART LIFE",
-      "color": "#e7f5ff",
-      "icon": "Laptop",
-      "isVirtual": false
-    }
-  ],
-  "timestamp": 1788179400000
-}
-```
-
-### 5.2 商品列表
+### 5.2 获取商品列表
 
 ```http
 GET /api/products
@@ -434,36 +462,46 @@ GET /api/products
 
 查询参数：
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| `page` | `integer` | 否 | `1` | 页码 |
-| `pageSize` | `integer` | 否 | `12` | 每页数量，最大 50 |
-| `keyword` | `string` | 否 | 空 | 搜索商品名称、副标题和描述 |
-| `categoryId` | `string` | 否 | 空 | 普通分类 ID |
-| `seckillOnly` | `boolean` | 否 | `false` | 是否只查询秒杀商品 |
-| `sort` | `string` | 否 | `default` | `default`、`price_asc`、`sales_desc` |
+- `page`：整数，默认 `1`
+- `pageSize`：整数，默认 `12`，最大 `50`
+- `keyword`：可选，搜索商品名称、副标题和描述
+- `categoryId`：可选，分类 ID
+- `sort`：可选，`default`、`price_asc`、`sales_desc`
 
 示例：
 
 ```http
-GET /api/products?page=1&pageSize=12&keyword=跑鞋&sort=sales_desc
+GET /api/products?page=1&pageSize=12&keyword=跑鞋&categoryId=10006&sort=sales_desc
 ```
 
 响应 `data`：
 
 ```json
 {
-  "list": [],
-  "total": 36,
+  "list": [
+    {
+      "id": "20001",
+      "name": "晨雾白跑鞋",
+      "price": 239.00,
+      "originalPrice": 399.00,
+      "stock": 120,
+      "sales": 8420,
+      "rating": 4.90,
+      "reviewCount": 86,
+      "images": ["https://example.com/product-cover.jpg"],
+      "tags": ["热卖", "舒适"]
+    }
+  ],
+  "total": 1,
   "page": 1,
   "pageSize": 12,
-  "hasMore": true
+  "hasMore": false
 }
 ```
 
-注意：排序必须在数据库分页前执行，否则无限滚动时只会对当前已经加载的页面排序。
+排序必须在分页前执行。默认只查询 `status=on_sale` 且未逻辑删除的商品。
 
-### 5.3 商品详情
+### 5.3 获取商品详情
 
 ```http
 GET /api/products/{productId}
@@ -471,33 +509,27 @@ GET /api/products/{productId}
 
 是否需要登录：否。
 
-响应：
+响应 `data`：
 
 ```json
 {
-  "code": 0,
-  "message": "success",
-  "data": {
-    "product": {},
-    "reviews": [],
-    "reviewSummary": {
-      "average": 4.9,
-      "quality": 4.9,
-      "service": 4.8,
-      "logistics": 4.9,
-      "reviewCount": 86,
-      "goodRate": 0.98
-    }
-  },
-  "timestamp": 1788179400000
+  "product": {},
+  "reviews": [],
+  "reviewSummary": {
+    "average": 4.90,
+    "reviewCount": 86,
+    "goodRate": 0.98,
+    "allCount": 86,
+    "goodCount": 82,
+    "mediumCount": 3,
+    "badCount": 1
+  }
 }
 ```
 
-`reviews` 可以返回商品详情页需要展示的少量预览评价，全部评价通过下一接口分页查询。
+`reviews` 为详情页预览评价，可以只返回少量最新评价。商品不存在或未上架时返回 `40400`。
 
-商品不存在时返回 HTTP `404` 和业务错误码 `40400`。
-
-### 5.4 商品全部评价
+### 5.4 获取商品评价
 
 ```http
 GET /api/products/{productId}/reviews
@@ -507,52 +539,35 @@ GET /api/products/{productId}/reviews
 
 查询参数：
 
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `filter` | `string` | `all` | `all`、`good`、`medium`、`bad`、`media` |
-| `page` | `integer` | `1` | 页码 |
-| `pageSize` | `integer` | `10` | 每页数量 |
-| `sort` | `string` | `latest` | `latest`、`helpful`，当前只需实现 latest |
-
-响应：
-
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "list": [],
-    "total": 86,
-    "page": 1,
-    "pageSize": 10,
-    "hasMore": true,
-    "summary": {
-      "average": 4.9,
-      "quality": 4.9,
-      "service": 4.8,
-      "logistics": 4.9,
-      "goodRate": 0.98,
-      "allCount": 86,
-      "goodCount": 82,
-      "mediumCount": 3,
-      "badCount": 1,
-      "mediaCount": 24
-    }
-  },
-  "timestamp": 1788179400000
-}
-```
+- `filter`：`all`、`good`、`medium`、`bad`，默认 `all`
+- `page`：默认 `1`
+- `pageSize`：默认 `10`，最大 `50`
+- `sort`：当前支持 `latest`，默认 `latest`
 
 筛选规则：
 
-- `good`：质量、服务、物流均大于等于 4
-- `medium`：任一维度等于 3
-- `bad`：任一维度小于等于 2
-- `media`：存在 `review_media` 记录
+- `good`：`rating >= 4`
+- `medium`：`rating = 3`
+- `bad`：`rating <= 2`
+
+本版本没有评价媒体表，因此不提供 `media` 筛选。
+
+响应 `data`：
+
+```json
+{
+  "list": [],
+  "total": 86,
+  "page": 1,
+  "pageSize": 10,
+  "hasMore": true,
+  "summary": {}
+}
+```
 
 ## 6. 购物车接口
 
-游客购物车可以暂时保存在浏览器本地。登录后，前端调用合并接口同步到服务端。
+游客购物车由前端保存在浏览器本地。登录后调用合并接口，将本地商品同步到 `cart_item`。
 
 ### 6.1 获取购物车
 
@@ -571,13 +586,15 @@ GET /api/cart
   "data": {
     "items": [],
     "selectedCount": 2,
-    "subtotal": 391.96,
+    "subtotal": 717.00,
     "shippingFee": 8.00,
-    "total": 399.96
+    "total": 725.00
   },
-  "timestamp": 1788179400000
+  "timestamp": 1788601800000
 }
 ```
+
+金额和商品展示信息由当前商品数据计算，不能信任客户端传入的价格。
 
 ### 6.2 添加购物车商品
 
@@ -585,25 +602,28 @@ GET /api/cart
 POST /api/cart/items
 ```
 
+是否需要登录：是。
+
 请求体：
 
 ```json
 {
   "productId": "20001",
-  "quantity": 1,
-  "seckillActivityId": "70001"
+  "quantity": 1
 }
 ```
 
-`seckillActivityId` 可为空。当前无 SKU，不需要 `skuId`。
+同一用户重复添加同一商品时增加原记录数量，不创建第二条记录。商品必须在售且库存充足。
 
-### 6.3 修改购物车商品数量或选中状态
+### 6.3 修改购物车商品
 
 ```http
 PATCH /api/cart/items/{cartItemId}
 ```
 
-请求体：
+是否需要登录：是。
+
+请求体中的字段可以单独传递：
 
 ```json
 {
@@ -612,7 +632,7 @@ PATCH /api/cart/items/{cartItemId}
 }
 ```
 
-两个字段均可单独传递。数量不能小于 1，且不能超过当前可售库存。
+`quantity` 必须大于等于 `1`，不能超过商品当前库存。
 
 ### 6.4 删除购物车商品
 
@@ -660,9 +680,9 @@ POST /api/cart/merge
 }
 ```
 
-服务器应按商品 ID 合并数量，并重新校验库存。
+服务端按商品 ID 合并数量，并重新校验商品状态和库存。
 
-## 7. 用户资料、地址、收藏和足迹接口
+## 7. 用户资料、地址和用户行为接口
 
 ### 7.1 获取用户资料
 
@@ -672,23 +692,27 @@ GET /api/users/me
 
 是否需要登录：是。
 
+返回当前用户对象。该接口可以与 `/api/auth/me` 返回相同的数据。
+
 ### 7.2 修改用户资料
 
 ```http
 PATCH /api/users/me
 ```
 
+是否需要登录：是。
+
 请求体：
 
 ```json
 {
   "nickname": "橙子同学",
-  "gender": "保密",
+  "gender": 0,
   "birthday": "1998-08-18"
 }
 ```
 
-当前头像由系统生成，头像上传接口可以后置。
+当前版本允许修改昵称、性别和生日。头像上传暂不实现，`avatarUrl` 可以由系统预置或后续补充。
 
 ### 7.3 获取地址列表
 
@@ -697,6 +721,8 @@ GET /api/users/me/addresses
 ```
 
 是否需要登录：是。
+
+按创建时间倒序返回当前用户未删除的地址。
 
 ### 7.4 新增地址
 
@@ -709,7 +735,7 @@ POST /api/users/me/addresses
 ```json
 {
   "receiver": "橙子同学",
-  "phone": "13800138000",
+  "phone": "13800138001",
   "provinceCode": "310000",
   "province": "上海市",
   "cityCode": "310100",
@@ -721,13 +747,15 @@ POST /api/users/me/addresses
 }
 ```
 
+如果设置为默认地址，服务端在同一个事务中取消该用户的其他默认地址。
+
 ### 7.5 修改地址
 
 ```http
 PUT /api/users/me/addresses/{addressId}
 ```
 
-请求体与新增地址相同。
+请求体与新增地址相同。只能修改当前用户自己的地址。
 
 ### 7.6 删除地址
 
@@ -735,7 +763,7 @@ PUT /api/users/me/addresses/{addressId}
 DELETE /api/users/me/addresses/{addressId}
 ```
 
-默认地址删除后，服务端可以将用户最近创建的其他地址设为默认地址。
+使用逻辑删除。删除默认地址后，可以将该用户最近创建的其他地址设置为默认地址。
 
 ### 7.7 设置默认地址
 
@@ -743,13 +771,15 @@ DELETE /api/users/me/addresses/{addressId}
 PUT /api/users/me/addresses/{addressId}/default
 ```
 
-必须在事务中取消旧默认地址并设置新默认地址。
+必须在事务中取消旧默认地址，再设置新默认地址。
 
 ### 7.8 获取收藏夹
 
 ```http
 GET /api/users/me/favorites?page=1&pageSize=20
 ```
+
+按收藏时间倒序返回收藏记录，并组装商品展示信息。
 
 ### 7.9 收藏商品
 
@@ -765,7 +795,7 @@ POST /api/users/me/favorites
 }
 ```
 
-重复收藏应返回成功或 `40900`，建议使用幂等成功。
+重复收藏建议直接返回成功，不重复插入。
 
 ### 7.10 取消收藏
 
@@ -779,20 +809,18 @@ DELETE /api/users/me/favorites/{productId}
 GET /api/users/me/browse-history?page=1&pageSize=20
 ```
 
-响应中的每条记录建议包含：
+响应中的每条记录：
 
 ```json
 {
   "id": "80001",
   "productId": "20001",
-  "viewedAt": "2026-08-31T12:30:00.000Z",
-  "priceAtView": 239.00,
-  "hasPriceDrop": true,
+  "viewedAt": "2026-09-05T12:30:00.000Z",
   "product": {}
 }
 ```
 
-前端按照 `viewedAt` 自行分组为“今天、昨天、近 7 天、更早”。
+前端可以按照 `viewedAt` 分组为“今天、昨天、近 7 天、更早”。
 
 ### 7.12 写入浏览足迹
 
@@ -808,17 +836,21 @@ POST /api/users/me/browse-history
 }
 ```
 
-浏览价格由服务端根据当前有效售价计算，不能信任客户端传入的价格。
+重复浏览同一商品时更新原记录的 `viewed_at`，不新增记录。服务端只接受存在的商品 ID。
 
-同一用户重复浏览同一商品时更新原记录，并限制最近 100 条。
+### 7.13 删除单条浏览足迹
 
-### 7.13 清空浏览足迹
+```http
+DELETE /api/users/me/browse-history/{historyId}
+```
+
+### 7.14 清空浏览足迹
 
 ```http
 DELETE /api/users/me/browse-history
 ```
 
-### 7.14 批量删除浏览足迹
+### 7.15 批量删除浏览足迹
 
 ```http
 POST /api/users/me/browse-history/batch-delete
@@ -831,6 +863,44 @@ POST /api/users/me/browse-history/batch-delete
   "ids": ["80001", "80002"]
 }
 ```
+
+### 7.16 获取搜索历史
+
+```http
+GET /api/users/me/search-history?page=1&pageSize=10
+```
+
+按 `searchedAt` 倒序返回最近搜索关键词。
+
+### 7.17 写入搜索关键词
+
+```http
+POST /api/users/me/search-history
+```
+
+请求体：
+
+```json
+{
+  "keyword": "跑鞋"
+}
+```
+
+关键词去除首尾空格后保存。相同用户再次搜索相同关键词时更新 `searched_at`。
+
+### 7.18 删除单条搜索历史
+
+```http
+DELETE /api/users/me/search-history/{historyId}
+```
+
+### 7.19 清空搜索历史
+
+```http
+DELETE /api/users/me/search-history
+```
+
+游客搜索历史继续由前端本地保存。
 
 ## 8. 订单与结算接口
 
@@ -860,16 +930,16 @@ POST /api/orders/preview
   "data": {
     "items": [],
     "address": {},
-    "subtotal": 391.96,
+    "subtotal": 717.00,
     "shippingFee": 8.00,
-    "total": 399.96,
+    "total": 725.00,
     "paymentExpireMinutes": 30
   },
-  "timestamp": 1788179400000
+  "timestamp": 1788601800000
 }
 ```
 
-结算预览必须重新校验商品状态、库存、秒杀活动和有效价格。
+预览时重新校验商品是否在售、库存是否充足、购物车记录是否属于当前用户，并由服务端重新计算金额。
 
 ### 8.2 创建订单
 
@@ -877,11 +947,7 @@ POST /api/orders/preview
 POST /api/orders
 ```
 
-请求头：
-
-```http
-Idempotency-Key: order-create-unique-key
-```
+是否需要登录：是。
 
 请求体：
 
@@ -893,7 +959,7 @@ Idempotency-Key: order-create-unique-key
 }
 ```
 
-响应：
+成功响应：
 
 ```json
 {
@@ -901,40 +967,40 @@ Idempotency-Key: order-create-unique-key
   "message": "订单创建成功",
   "data": {
     "orderId": "60001",
-    "orderNo": "OM202608310001",
+    "orderNo": "OM202609050001",
     "status": "pending_payment",
-    "total": 399.96,
-    "paymentExpireAt": "2026-08-31T13:00:00.000Z"
+    "total": 725.00,
+    "paymentExpireAt": "2026-09-05T13:00:00.000Z"
   },
-  "timestamp": 1788179400000
+  "timestamp": 1788601800000
 }
 ```
 
-服务端事务必须同时完成：订单、地址快照、订单商品快照、库存锁定、订单状态历史和购物车清理。
+订单创建事务完成以下操作：
+
+1. 校验当前用户的购物车和地址
+2. 创建 `orders`，写入收货地址快照
+3. 创建 `order_item`，写入商品名称、图片、单价和数量快照
+4. 使用条件更新扣减 `product.stock`
+5. 删除或清理已购买的购物车记录
+
+库存扣减失败时整个事务回滚，并返回 `40900`。
 
 ### 8.3 获取订单列表
 
 ```http
-GET /api/orders
+GET /api/orders?status=pending_payment&page=1&pageSize=10
 ```
+
+是否需要登录：是。
 
 查询参数：
 
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `status` | `string` | 空 | 订单状态，不传表示全部 |
-| `page` | `integer` | `1` | 页码 |
-| `pageSize` | `integer` | `10` | 每页数量 |
+- `status`：可选，不传表示全部订单
+- `page`：默认 `1`
+- `pageSize`：默认 `10`，最大 `50`
 
-前端订单状态筛选值：
-
-```text
-pending_payment
-pending_shipment
-pending_receipt
-pending_review
-refunding
-```
+只能查询当前登录用户自己的订单。
 
 ### 8.4 获取订单详情
 
@@ -944,15 +1010,9 @@ GET /api/orders/{orderId}
 
 是否需要登录：是，只能查看自己的订单。
 
-响应 `data` 为完整 `Order`，并可以额外包含：
+响应 `data` 为完整订单对象，包含 `items`、地址快照、金额、支付状态和 `trackingNo`。
 
-```json
-{
-  "statusTimeline": [],
-  "shipment": null,
-  "availableActions": ["pay", "refund", "receive", "review"]
-}
-```
+本版本没有独立物流表，物流信息直接读取 `orders.tracking_no` 和 `orders.shipped_at`。
 
 ### 8.5 取消订单
 
@@ -968,7 +1028,7 @@ POST /api/orders/{orderId}/cancel
 }
 ```
 
-用户只能取消待付款订单。超时取消由系统任务调用相同的业务服务完成。
+只允许取消 `pending_payment` 订单。取消时将订单状态改为 `cancelled`，并将订单商品数量加回 `product.stock`。
 
 ### 8.6 确认收货
 
@@ -976,167 +1036,85 @@ POST /api/orders/{orderId}/cancel
 POST /api/orders/{orderId}/receive
 ```
 
-状态要求：`pending_receipt`。
+只允许操作 `pending_receipt` 订单。成功后状态改为 `pending_review`，写入 `received_at`。
 
-成功后订单变为 `pending_review`。
+## 9. 模拟支付接口
 
-### 8.7 获取售后订单列表
+新数据库没有支付流水表，支付信息直接保存到 `orders.payment_method` 和 `orders.paid_at`。
 
-```http
-GET /api/after-sales
-```
-
-查询参数：
-
-```text
-status=pending|approved|rejected|refunded|cancelled
-page=1
-pageSize=10
-```
-
-## 9. 支付接口
-
-### 9.1 创建支付交易
+### 9.1 模拟支付订单
 
 ```http
-POST /api/orders/{orderId}/payments
+POST /api/orders/{orderId}/pay
 ```
+
+是否需要登录：是。
 
 请求体：
 
 ```json
 {
-  "paymentMethod": "wechat"
+  "paymentMethod": "mock"
 }
 ```
 
-支付方式：
+开发阶段只模拟支付成功，不接入微信或支付宝。成功后在事务中：
 
-```text
-wechat
-alipay
-```
+- 校验订单属于当前用户
+- 校验订单状态为 `pending_payment`
+- 写入 `payment_method`
+- 写入 `paid_at`
+- 将订单状态更新为 `pending_shipment`
 
 响应：
 
 ```json
 {
   "code": 0,
-  "message": "success",
+  "message": "支付成功",
   "data": {
-    "paymentId": "90001",
-    "paymentNo": "PAY202608310001",
-    "paymentMethod": "wechat",
-    "amount": 399.96,
-    "status": "pending",
-    "expiresAt": "2026-08-31T13:00:00.000Z"
+    "orderId": "60001",
+    "orderNo": "OM202609050001",
+    "status": "pending_shipment",
+    "paymentMethod": "mock",
+    "paidAt": "2026-09-05T12:35:00.000Z"
   },
-  "timestamp": 1788179400000
+  "timestamp": 1788602100000
 }
 ```
 
-### 9.2 开发环境模拟支付成功
+订单详情中的支付状态由 `status`、`paymentMethod` 和 `paidAt` 组合表示，不提供支付记录列表接口。
 
-```http
-POST /api/payments/{paymentId}/mock-success
-```
+### 9.2 支付超时取消
 
-此接口仅允许开发环境使用。
-
-成功后必须：
-
-1. 支付记录改为 `success`
-2. 订单从 `pending_payment` 改为 `pending_shipment`
-3. 锁定库存转为已售库存
-4. 增加商品销量和秒杀销量
-5. 写入订单状态历史
-
-### 9.3 取消支付
-
-```http
-POST /api/payments/{paymentId}/cancel
-```
-
-取消支付不会立即取消订单，订单仍然可以在 30 分钟内重新支付。
-
-### 9.4 查询支付记录
-
-```http
-GET /api/orders/{orderId}/payments
-```
-
-只能查看当前用户自己的订单支付记录。
-
-## 10. 售后和退款接口
-
-### 10.1 创建售后申请
-
-```http
-POST /api/orders/{orderId}/after-sales
-```
-
-请求体：
-
-```json
-{
-  "type": "refund_only",
-  "reason": "商品不合适",
-  "description": "希望申请退款",
-  "items": [
-    {
-      "orderItemId": "61001",
-      "quantity": 1
-    }
-  ]
-}
-```
-
-售后类型：
+服务端定时任务扫描：
 
 ```text
-refund_only    仅退款
-return_refund  退货退款，当前可暂不实现退货物流
+status = pending_payment
+payment_expire_at < 当前时间
 ```
 
-订单进入 `refunding` 状态后，个人中心的退款售后列表可以查询到该记录。
+发现超时订单后执行与取消订单相同的事务：更新订单状态并恢复商品库存。前端倒计时只用于展示，不能作为实际取消依据。
 
-### 10.2 获取售后详情
+## 10. 评价接口
 
-```http
-GET /api/after-sales/{afterSaleId}
-```
-
-### 10.3 取消售后申请
-
-```http
-POST /api/after-sales/{afterSaleId}/cancel
-```
-
-只允许取消尚未处理的售后申请。
-
-### 10.4 开发环境模拟退款成功
-
-```http
-POST /api/after-sales/{afterSaleId}/mock-refund
-```
-
-此接口仅允许开发环境使用。成功后创建退款流水并将订单改为 `refunded`。
-
-## 11. 评价接口
-
-### 11.1 获取待评价订单商品
+### 10.1 获取待评价订单商品
 
 ```http
 GET /api/users/me/reviews/pending
 ```
 
-用于展示当前用户还没有评价的订单商品。
+是否需要登录：是。
 
-### 11.2 提交订单评价
+查询 `pending_review` 订单中的 `order_item`，排除已经存在于 `product_review` 的订单商品。
+
+### 10.2 提交订单评价
 
 ```http
 POST /api/orders/{orderId}/reviews
 ```
+
+是否需要登录：是。
 
 请求体：
 
@@ -1145,391 +1123,97 @@ POST /api/orders/{orderId}/reviews
   "reviews": [
     {
       "orderItemId": "61001",
-      "content": "质量不错，物流也很快。",
-      "quality": 5,
-      "service": 5,
-      "logistics": 5,
-      "anonymous": false,
-      "media": []
+      "productId": "20001",
+      "rating": 5,
+      "content": "商品很好，物流也很快。",
+      "anonymous": false
     }
   ]
 }
 ```
 
-校验规则：
+服务端必须校验：
 
-- 订单必须属于当前用户
-- 订单必须处于 `pending_review`
-- `orderItemId` 必须属于该订单
-- 三个评分都必须是 1 到 5 的整数
-- 评价内容不能为空
-- 同一个订单商品只能评价一次
-- 评价成功后订单改为 `completed`
+- 订单属于当前用户
+- 订单商品属于当前订单
+- `productId` 与订单商品一致
+- 评分范围为 `1` 到 `5`
+- 同一用户不能重复评价同一订单商品
 
-当前前端评价图片和视频只做本地预览，不上传服务器，因此开发阶段 `media` 可以为空数组。后续接入上传后，`media` 使用媒体地址或媒体 ID。
+评价成功后更新商品的 `rating_avg` 和 `review_count`。订单所有商品都完成评价后，可以将订单状态更新为 `completed`，并写入 `completed_at`。
 
-### 11.3 上传评价媒体，后置
+本版本不提供评价图片或视频上传接口。
 
-```http
-POST /api/reviews/media
-Content-Type: multipart/form-data
+## 11. 接口权限总览
+
+- 游客：图形验证码、短信发送、登录、分类、商品列表、商品详情、商品评价列表
+- 登录用户：当前用户、购物车、地址、收藏、浏览足迹、搜索历史、结算、订单、模拟支付、确认收货和提交评价
+- 游客购物车、搜索历史：由前端本地保存
+- 商品、分类数据：当前通过 SQL 或数据库工具维护，不提供后台管理接口
+
+## 12. 数据一致性和实现顺序
+
+### 12.1 库存扣减
+
+库存直接使用 `product.stock`，不创建独立库存表。创建订单时建议使用带条件的更新：
+
+```sql
+UPDATE product
+SET stock = stock - #{quantity}
+WHERE id = #{productId}
+  AND status = 'on_sale'
+  AND stock >= #{quantity}
+  AND deleted_at = 0;
 ```
 
-该接口后置实现，文件保存到对象存储，MySQL 只保存 URL 和 Object Key。
+受影响行数为 `0` 时返回库存不足，并回滚订单事务。
 
-## 12. 搜索历史接口
+### 12.2 订单地址
 
-### 12.1 获取搜索历史
+创建订单时将 `user_address` 的完整内容复制到 `orders` 的收货字段。之后用户修改或删除地址，不影响已经创建的订单。
 
-```http
-GET /api/users/me/search-history
+### 12.3 金额计算
+
+- 商品小计：订单明细 `unitPrice * quantity` 之和
+- 运费：按照商品当前固定运费规则计算
+- 订单总额：商品小计加运费
+- 所有金额由服务端计算，客户端金额只用于展示
+
+### 12.4 推荐实现顺序
+
+1. 统一响应、异常处理和 Token 鉴权
+2. 分类和商品列表、详情、评价查询
+3. 用户资料和地址
+4. 购物车及游客购物车合并
+5. 收藏、浏览足迹和搜索历史
+6. 结算预览、订单创建和库存扣减
+7. 模拟支付、超时取消和确认收货
+8. 提交评价和订单完成
+
+## 13. 本地初始化
+
+创建新数据库和表：
+
+```bash
+mysql -uroot -p < sql/create_core_business_tables.sql
 ```
 
-响应按 `searchedAt` 倒序返回最近 10 条。
+插入测试数据：
 
-### 12.2 写入搜索关键词
-
-```http
-POST /api/users/me/search-history
+```bash
+mysql -uroot -p < sql/insert_demo_data.sql
 ```
 
-请求体：
-
-```json
-{
-  "keyword": "跑鞋"
-}
-```
-
-相同关键词再次搜索时更新时间并移动到第一位。
-
-### 12.3 删除单条搜索历史
-
-```http
-DELETE /api/users/me/search-history/{historyId}
-```
-
-### 12.4 清空搜索历史
-
-```http
-DELETE /api/users/me/search-history
-```
-
-游客搜索历史继续由前端本地保存。
-
-## 13. 客服接口和 WebSocket
-
-客服页面支持游客访问，因此会话中的 `userId` 可以为空，使用 `visitorToken` 识别游客。
-
-### 13.1 获取当前客服会话
-
-```http
-GET /api/service/sessions/current
-```
-
-登录用户使用 Token 识别，游客使用请求头：
-
-```http
-X-Visitor-Token: visitor-token
-```
-
-没有会话时可以自动创建一个新会话。
-
-### 13.2 创建客服会话
-
-```http
-POST /api/service/sessions
-```
-
-响应：
-
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "sessionId": "110001",
-    "status": "active",
-    "visitorToken": "visitor-token"
-  },
-  "timestamp": 1788179400000
-}
-```
-
-### 13.3 获取历史消息
-
-```http
-GET /api/service/sessions/{sessionId}/messages?cursor=0&limit=30
-```
-
-响应消息格式：
-
-```json
-{
-  "id": "120001",
-  "sender": "service",
-  "content": "你好呀，我是橙子小助手，有什么可以帮你？",
-  "createdAt": "2026-08-31T12:30:00.000Z",
-  "productId": null,
-  "orderId": null,
-  "messageType": "text"
-}
-```
-
-`sender` 对齐前端类型，取值为 `user` 或 `service`。
-
-### 13.4 HTTP 发送消息
-
-```http
-POST /api/service/sessions/{sessionId}/messages
-```
-
-请求体：
-
-```json
-{
-  "messageType": "text",
-  "content": "商品什么时候发货？",
-  "productId": null,
-  "orderId": null,
-  "payload": null
-}
-```
-
-消息类型：
+应用配置使用数据库环境变量：
 
 ```text
-text
-product_card
-order_card
-faq
+MYSQL_DATABASE=orange_market_simple
 ```
 
-商品卡片和订单卡片建议在 `payload` 中保存展示快照。
-
-### 13.5 WebSocket 连接
+测试数据脚本中的示例用户手机号：
 
 ```text
-ws://{host}/ws/service?sessionId={sessionId}&visitorToken={visitorToken}
+13800138001
+13800138002
+13800138003
 ```
-
-客户端发送：
-
-```json
-{
-  "type": "message",
-  "data": {
-    "messageType": "text",
-    "content": "你好"
-  }
-}
-```
-
-服务端推送：
-
-```json
-{
-  "type": "message",
-  "data": {
-    "id": "120002",
-    "sender": "service",
-    "content": "收到啦，我已经记下你的问题。",
-    "createdAt": "2026-08-31T12:30:01.000Z",
-    "messageType": "text"
-  }
-}
-```
-
-连接建立、断开和心跳事件：
-
-```json
-{
-  "type": "connected",
-  "data": {
-    "sessionId": "110001"
-  }
-}
-```
-
-在线状态可以使用 Redis 保存，不写入 MySQL。
-
-### 13.6 获取 FAQ
-
-```http
-GET /api/service/faqs
-```
-
-响应：
-
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": [
-    {
-      "id": "130001",
-      "question": "商品什么时候发货？",
-      "answer": "现货订单会在 24 小时内安排发出，请耐心等待物流更新哦。"
-    }
-  ],
-  "timestamp": 1788179400000
-}
-```
-
-## 14. 状态流转规则
-
-### 14.1 订单状态
-
-```text
-创建订单       -> pending_payment
-支付成功       -> pending_shipment
-系统发货       -> pending_receipt
-确认收货       -> pending_review
-完成评价       -> completed
-支付超时       -> cancelled
-申请售后       -> refunding
-退款成功       -> refunded
-```
-
-以下状态变化必须写入 `order_status_history`：
-
-- 原状态
-- 新状态
-- 操作来源：`user` 或 `system`
-- 操作者 ID
-- 变更原因
-- 变更时间
-
-### 14.2 支付超时自动取消
-
-后端定时任务每分钟扫描：
-
-```text
-status = pending_payment
-payment_expire_at < 当前时间
-```
-
-并在事务中取消订单、释放普通库存或秒杀库存、更新库存锁定记录。
-
-前端倒计时只用于展示，不能作为订单自动取消的实际依据。
-
-### 14.3 库存状态
-
-普通商品和秒杀商品都需要支持：
-
-```text
-available_stock  可售库存
-locked_stock     订单锁定库存
-sold_stock       已售库存
-```
-
-创建订单时锁定库存，支付成功时转为已售，取消订单时释放库存。
-
-## 15. 接口权限总览
-
-| 接口模块 | 游客 | 登录用户 |
-| --- | --- | --- |
-| 分类、商品、搜索商品 | 支持 | 支持 |
-| 商品详情和评价 | 支持 | 支持 |
-| 客服页面 | 支持 | 支持 |
-| 购物车 | 本地存储 | 服务端购物车 |
-| 创建订单、结算 | 不支持 | 支持 |
-| 支付 | 不支持 | 支持 |
-| 订单、地址 | 不支持 | 支持 |
-| 收藏 | 本地临时状态 | 服务端保存 |
-| 浏览足迹 | 本地临时状态 | 服务端保存 |
-| 提交评价 | 不支持 | 支持 |
-| 售后退款 | 不支持 | 支持 |
-| 搜索历史 | 本地临时状态 | 服务端保存 |
-
-## 16. 前端接入注意事项
-
-### 16.1 当前 Mock 接口
-
-当前前端已经定义并使用：
-
-```http
-GET /api/categories
-GET /api/products
-GET /api/products/{productId}
-```
-
-后端优先实现这三个接口即可完成商品列表和商品详情的首次联调。
-
-### 16.2 搜索参数
-
-前端搜索框跳转地址为：
-
-```text
-/search?q=跑鞋
-```
-
-前端请求后端时需要把 URL 参数 `q` 转换为接口参数 `keyword`。
-
-### 16.3 评价全部列表
-
-商品详情页的“查看全部评价”跳转到：
-
-```text
-/product/{productId}/reviews
-```
-
-因此必须实现：
-
-```http
-GET /api/products/{productId}/reviews
-```
-
-不能只在商品详情接口中返回固定的少量评价。
-
-### 16.4 金额计算
-
-商品售价、秒杀价、运费和订单总额都由服务端重新计算，前端传入的金额只能作为展示参考。
-
-当前前端规则是每个商品固定收取一次运费，同一商品增加数量不会重复收取该商品运费。订单创建时将最终金额写入订单和订单商品快照。
-
-### 16.5 商品排序和无限滚动
-
-商品列表接口需要在数据库分页前完成排序。前端的无限滚动依赖：
-
-```json
-{
-  "list": [],
-  "total": 0,
-  "hasMore": false
-}
-```
-
-### 16.6 脱敏规则
-
-- 用户手机号响应时脱敏
-- 收货手机号响应时脱敏
-- 匿名评价返回“匿名用户”
-- 不在日志中打印短信验证码、Token 和支付敏感信息
-
-## 17. 推荐后端实现顺序
-
-1. 统一响应体、异常处理和 Token 鉴权
-2. 分类、商品列表、商品详情和商品评价列表
-3. 手机验证码登录和用户资料
-4. 地址、购物车、收藏和足迹
-5. 结算预览、订单创建和订单查询
-6. 模拟支付、支付超时取消和库存释放
-7. 确认收货、评价提交和订单完成
-8. 售后申请和模拟退款
-9. FAQ、客服 HTTP 接口和 WebSocket
-10. Redis 缓存、秒杀原子扣库存和异步足迹持久化
-
-## 18. 暂不实现的接口
-
-当前不需要实现：
-
-- 后台管理员登录和商品管理接口
-- 商家端接口
-- 优惠券接口
-- 发票接口
-- SKU 规格接口
-- 真实微信支付和支付宝支付接口
-- 真实物流平台回调接口
-- 评价图片和视频上传接口
-- 价格提醒推送接口
