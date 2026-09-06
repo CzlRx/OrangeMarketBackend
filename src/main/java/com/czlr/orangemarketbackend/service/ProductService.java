@@ -56,7 +56,7 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
             ProductReviewMapper productReviewMapper,
             UserAccountMapper userAccountMapper,
             ObjectMapper objectMapper,
-            @Qualifier("redisTemplate") RedisTemplate<String, Object> redisTemplate) {
+            RedisTemplate<String, Object> redisTemplate) {
         this.productReviewMapper = productReviewMapper;
         this.userAccountMapper = userAccountMapper;
         this.objectMapper = objectMapper;
@@ -257,7 +257,7 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
                 review.getCreatedAt());
     }
 
-    private ProductDTO toProductDTO(Product product) {
+    public ProductDTO toProductDTO(Product product) {
         return new ProductDTO(
                 toString(product.getId()),
                 product.getName(),

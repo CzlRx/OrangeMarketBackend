@@ -904,10 +904,10 @@ DELETE /api/users/me/search-history
 
 ## 8. 订单与结算接口
 
-### 8.1 结算预览
+### 8.1 购物车结算预览
 
 ```http
-POST /api/orders/preview
+POST /api/orders/cart/preview
 ```
 
 是否需要登录：是。
@@ -941,10 +941,10 @@ POST /api/orders/preview
 
 预览时重新校验商品是否在售、库存是否充足、购物车记录是否属于当前用户，并由服务端重新计算金额。
 
-### 8.2 创建订单
+### 8.2 购物车创建订单
 
 ```http
-POST /api/orders
+POST /api/orders/cart
 ```
 
 是否需要登录：是。
@@ -986,7 +986,35 @@ POST /api/orders
 
 库存扣减失败时整个事务回滚，并返回 `40900`。
 
-### 8.3 获取订单列表
+### 8.3 直接购买创建订单
+
+```http
+POST /api/orders/direct
+```
+
+是否需要登录：是。
+
+请求体：
+
+```json
+{
+  "productId": "20001",
+  "quantity": 1,
+  "addressId": "30001",
+  "buyerRemark": "请尽快发货"
+}
+```
+
+成功响应结构与 8.2 相同。订单创建事务完成以下操作：
+
+1. 校验当前用户的商品、库存和地址
+2. 创建 `orders`，写入收货地址快照
+3. 创建 `order_item`，写入商品名称、图片、单价和数量快照
+4. 使用条件更新扣减 `product.stock`
+
+直接购买不会新增、修改或删除购物车记录。库存扣减失败时整个事务回滚，并返回 `40900`。
+
+### 8.4 获取订单列表
 
 ```http
 GET /api/orders?status=pending_payment&page=1&pageSize=10
@@ -1002,7 +1030,7 @@ GET /api/orders?status=pending_payment&page=1&pageSize=10
 
 只能查询当前登录用户自己的订单。
 
-### 8.4 获取订单详情
+### 8.5 获取订单详情
 
 ```http
 GET /api/orders/{orderId}
@@ -1014,7 +1042,7 @@ GET /api/orders/{orderId}
 
 本版本没有独立物流表，物流信息直接读取 `orders.tracking_no` 和 `orders.shipped_at`。
 
-### 8.5 取消订单
+### 8.6 取消订单
 
 ```http
 POST /api/orders/{orderId}/cancel
@@ -1030,7 +1058,7 @@ POST /api/orders/{orderId}/cancel
 
 只允许取消 `pending_payment` 订单。取消时将订单状态改为 `cancelled`，并将订单商品数量加回 `product.stock`。
 
-### 8.6 确认收货
+### 8.7 确认收货
 
 ```http
 POST /api/orders/{orderId}/receive
