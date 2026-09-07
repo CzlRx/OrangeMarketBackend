@@ -127,6 +127,9 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
 
             // 3. 查询或创建用户
             if(userAccount != null){
+                if (userAccount.getStatus() != null && userAccount.getStatus() != CommonStatus.ACTIVE) {
+                    throw new BusinessException(ResultCode.FORBIDDEN, "账号已被封禁");
+                }
                 // 老用户：直接读取用户信息
                 isNewUser = false;
                 map = objectMapper.convertValue(userAccount, Map.class);

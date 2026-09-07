@@ -10,4 +10,8 @@ public final class AuthRedisKey {
     public static String login(Long userId, String sessionId) {
         return LOGIN_KEY_PREFIX + userId + sessionId;
     }
+
+    public static String loginPattern(Long userId) {
+        return LOGIN_KEY_PREFIX + userId + "*";
+    }
 }
