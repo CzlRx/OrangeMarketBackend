@@ -9,6 +9,7 @@ import com.czlr.orangemarketbackend.common.enums.OrderStatus;
 import com.czlr.orangemarketbackend.common.enums.ProductStatus;
 import com.czlr.orangemarketbackend.common.enums.ValueEnumUtils;
 import com.czlr.orangemarketbackend.common.exception.BusinessException;
+import com.czlr.orangemarketbackend.config.RabbitConfig;
 import com.czlr.orangemarketbackend.entity.dto.CancelOrderRequest;
 import com.czlr.orangemarketbackend.entity.dto.CartOrderCreateRequest;
 import com.czlr.orangemarketbackend.entity.dto.CartOrderPreviewRequest;
@@ -19,6 +20,8 @@ import com.czlr.orangemarketbackend.entity.dto.OrderDTO;
 import com.czlr.orangemarketbackend.entity.dto.OrderItemDTO;
 import com.czlr.orangemarketbackend.entity.dto.OrderPageDTO;
 import com.czlr.orangemarketbackend.entity.dto.OrderPreviewDTO;
+import com.czlr.orangemarketbackend.entity.dto.PayOrderRequest;
+import com.czlr.orangemarketbackend.entity.dto.PayOrderResultDTO;
 import com.czlr.orangemarketbackend.entity.po.CartItem;
 import com.czlr.orangemarketbackend.entity.po.Order;
 import com.czlr.orangemarketbackend.entity.po.OrderItem;
@@ -29,6 +32,7 @@ import com.czlr.orangemarketbackend.mapper.OrderItemMapper;
 import com.czlr.orangemarketbackend.mapper.OrderMapper;
 import com.czlr.orangemarketbackend.mapper.ProductMapper;
 import com.czlr.orangemarketbackend.mapper.UserAddressMapper;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,16 +59,19 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
     private final OrderItemMapper orderItemMapper;
     private final UserAddressMapper userAddressMapper;
     private final CartItemMapper cartItemMapper;
+    private final RabbitTemplate rabbitTemplate;
 
     public OrderService(
             ProductMapper productMapper,
             OrderItemMapper orderItemMapper,
             UserAddressMapper userAddressMapper,
-            CartItemMapper cartItemMapper) {
+            CartItemMapper cartItemMapper,
+            RabbitTemplate rabbitTemplate) {
         this.productMapper = productMapper;
         this.orderItemMapper = orderItemMapper;
         this.userAddressMapper = userAddressMapper;
         this.cartItemMapper = cartItemMapper;
+        this.rabbitTemplate = rabbitTemplate;
     }
 
     public OrderPreviewDTO previewCart(Long userId, CartOrderPreviewRequest request) {
@@ -91,6 +98,10 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
         decreaseStock(lines);
 
         Order order = createOrder(userId, address, request.getBuyerRemark(), lines);
+        rabbitTemplate.convertAndSend(
+                RabbitConfig.PAYMENT_TIMEOUT_EXCHANGE,
+                RabbitConfig.PAYMENT_TIMEOUT_ROUTING_KEY,
+                order.getId());
         cartItemMapper.delete(new LambdaQueryWrapper<CartItem>()
                 .eq(CartItem::getUserId, userId)
                 .in(CartItem::getId, cartItemIds));
@@ -108,12 +119,16 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
         ensureStock(product, quantity);
         UserAddress address = getOwnedAddress(userId, parseId(request.getAddressId(), "addressId"));
         decreaseStock(List.of(new OrderLine(product, quantity)));
-
-        return toCreateResult(createOrder(
+        Order order = createOrder(
                 userId,
                 address,
                 request.getBuyerRemark(),
-                List.of(new OrderLine(product, quantity))));
+                List.of(new OrderLine(product, quantity)));
+        rabbitTemplate.convertAndSend(
+                RabbitConfig.PAYMENT_TIMEOUT_EXCHANGE,
+                RabbitConfig.PAYMENT_TIMEOUT_ROUTING_KEY,
+                order.getId());
+        return toCreateResult(order);
     }
 
     public OrderPageDTO getOrders(Long userId, String status, int page, int pageSize) {
@@ -150,6 +165,42 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
     }
 
     @Transactional
+    public PayOrderResultDTO payOrder(Long userId, Long orderId, PayOrderRequest request) {
+        String paymentMethod = requirePaymentMethod(request);
+        Order order = getOwnedOrder(userId, orderId);
+        LocalDateTime paidAt = LocalDateTime.now();
+
+        if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
+            throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "仅待付款订单可以支付");
+        }
+        if (isPaymentExpired(order, paidAt)) {
+            throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单支付已超时");
+        }
+
+        int updated = baseMapper.update(null, new LambdaUpdateWrapper<Order>()
+                .eq(Order::getId, orderId)
+                .eq(Order::getUserId, userId)
+                .eq(Order::getStatus, OrderStatus.PENDING_PAYMENT)
+                .and(wrapper -> wrapper
+                        .isNull(Order::getPaymentExpireAt)
+                        .or()
+                        .gt(Order::getPaymentExpireAt, paidAt))
+                .set(Order::getStatus, OrderStatus.PENDING_SHIPMENT)
+                .set(Order::getPaymentMethod, paymentMethod)
+                .set(Order::getPaidAt, paidAt));
+        if (updated == 0) {
+            throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单状态已发生变化或支付已超时");
+        }
+
+        return new PayOrderResultDTO(
+                String.valueOf(order.getId()),
+                order.getOrderNo(),
+                OrderStatus.PENDING_SHIPMENT,
+                paymentMethod,
+                paidAt);
+    }
+
+    @Transactional
     public void cancelOrder(Long userId, Long orderId, CancelOrderRequest request) {
         Order order = getOwnedOrder(userId, orderId);
         if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
@@ -169,6 +220,33 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
         }
 
         for (OrderItem item : getOrderItems(order.getId())) {
+            if (item.getProductId() == null || item.getQuantity() == null || item.getQuantity() < 1) {
+                continue;
+            }
+            if (productMapper.increaseStock(item.getProductId(), item.getQuantity()) == 0) {
+                throw new BusinessException(ResultCode.CONFLICT, "库存恢复失败");
+            }
+        }
+    }
+
+    @Transactional
+    public void cancelExpiredOrder(Long orderId) {
+        Order order = baseMapper.selectById(orderId);
+        if (order == null || order.getStatus() != OrderStatus.PENDING_PAYMENT) {
+            return;
+        }
+
+        int updated = baseMapper.update(null, new LambdaUpdateWrapper<Order>()
+                .eq(Order::getId, orderId)
+                .eq(Order::getStatus, OrderStatus.PENDING_PAYMENT)
+                .set(Order::getStatus, OrderStatus.CANCELLED)
+                .set(Order::getCancelledAt, LocalDateTime.now())
+                .set(Order::getCancelReason, "支付超时自动取消"));
+        if (updated == 0) {
+            return;
+        }
+
+        for (OrderItem item : getOrderItems(orderId)) {
             if (item.getProductId() == null || item.getQuantity() == null || item.getQuantity() < 1) {
                 continue;
             }
@@ -450,6 +528,23 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
             throw new BusinessException(ResultCode.BAD_REQUEST, "quantity 必须大于等于 1");
         }
         return quantity;
+    }
+
+    private String requirePaymentMethod(PayOrderRequest request) {
+        String paymentMethod = request == null ? null : request.getPaymentMethod();
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "paymentMethod 不能为空");
+        }
+        paymentMethod = paymentMethod.trim();
+        if (!"mock".equals(paymentMethod)) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "当前仅支持 mock 支付");
+        }
+        return paymentMethod;
+    }
+
+    private boolean isPaymentExpired(Order order, LocalDateTime now) {
+        return order.getPaymentExpireAt() != null
+                && !order.getPaymentExpireAt().isAfter(now);
     }
 
     private OrderStatus parseOrderStatus(String status) {

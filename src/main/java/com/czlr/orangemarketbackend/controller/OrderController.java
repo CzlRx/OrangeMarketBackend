@@ -9,6 +9,8 @@ import com.czlr.orangemarketbackend.entity.dto.OrderCreateResultDTO;
 import com.czlr.orangemarketbackend.entity.dto.OrderDTO;
 import com.czlr.orangemarketbackend.entity.dto.OrderPageDTO;
 import com.czlr.orangemarketbackend.entity.dto.OrderPreviewDTO;
+import com.czlr.orangemarketbackend.entity.dto.PayOrderRequest;
+import com.czlr.orangemarketbackend.entity.dto.PayOrderResultDTO;
 import com.czlr.orangemarketbackend.service.OrderService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -64,6 +66,14 @@ public class OrderController {
             @RequestAttribute("userId") Long userId,
             @PathVariable Long orderId) {
         return Result.success(orderService.getOrder(userId, orderId));
+    }
+
+    @PostMapping("/{orderId}/pay")
+    public Result<PayOrderResultDTO> payOrder(
+            @RequestAttribute("userId") Long userId,
+            @PathVariable Long orderId,
+            @RequestBody PayOrderRequest request) {
+        return Result.success(orderService.payOrder(userId, orderId, request));
     }
 
     @PostMapping("/{orderId}/cancel")

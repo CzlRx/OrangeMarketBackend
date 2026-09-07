@@ -167,6 +167,22 @@ public class ProductService extends ServiceImpl<ProductMapper, Product> {
         return result;
     }
 
+    public void invalidateProductCaches(Long productId) {
+        deleteCacheKeys(PRODUCT_LIST_CACHE_PREFIX + "*");
+        deleteCacheKeys(PRODUCT_DETAIL_CACHE_PREFIX + productId);
+        deleteCacheKeys(PRODUCT_REVIEWS_CACHE_PREFIX + productId + ":*");
+    }
+
+    private void deleteCacheKeys(String pattern) {
+        try {
+            Set<String> keys = redisTemplate.keys(pattern);
+            if (keys != null && !keys.isEmpty()) {
+                redisTemplate.delete(keys);
+            }
+        } catch (RuntimeException ignored) {
+        }
+    }
+
     private String productListCacheKey(
             long page, long pageSize, String keyword, Long categoryId, String sort) {
         return PRODUCT_LIST_CACHE_PREFIX

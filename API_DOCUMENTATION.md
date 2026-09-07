@@ -1113,16 +1113,55 @@ POST /api/orders/{orderId}/pay
 
 订单详情中的支付状态由 `status`、`paymentMethod` 和 `paidAt` 组合表示，不提供支付记录列表接口。
 
-### 9.2 支付超时取消
+### 9.2 基于消息队列的支付超时取消
 
-服务端定时任务扫描：
+支付超时取消通过 RabbitMQ 的 TTL 队列和死信交换机实现，不使用定时任务轮询订单表。
 
-```text
-status = pending_payment
-payment_expire_at < 当前时间
+订单创建成功后，服务端发送一条包含 `orderId` 的支付超时消息：
+
+```java
+rabbitTemplate.convertAndSend(
+        "order.payment.timeout.exchange",
+        "order.payment.timeout",
+        orderId);
 ```
 
-发现超时订单后执行与取消订单相同的事务：更新订单状态并恢复商品库存。前端倒计时只用于展示，不能作为实际取消依据。
+消息流转如下：
+
+```text
+order.payment.timeout.exchange
+        |
+        | routingKey = order.payment.timeout
+        v
+order.payment.timeout.queue
+        |
+        | TTL = 30 分钟，消息过期
+        v
+order.cancel.exchange
+        |
+        | routingKey = order.cancel
+        v
+order.cancel.queue
+        |
+        v
+OrderTimeoutConsumer
+```
+
+RabbitMQ 资源说明：
+
+- `order.payment.timeout.exchange`：支付超时消息的直接交换机，负责将消息路由到等待队列。
+- `order.payment.timeout.queue`：持久化等待队列，消息最多等待 30 分钟；消息过期后转发到 `order.cancel.exchange`。
+- `order.cancel.exchange`：死信交换机，负责将过期消息路由到取消队列。
+- `order.cancel.queue`：持久化取消队列，由订单超时消费者监听。
+
+消费者监听 `order.cancel.queue`，收到订单 ID 后执行事务：
+
+1. 查询订单并判断状态是否仍为 `pending_payment`。
+2. 使用带状态条件的更新，将订单改为 `cancelled`，写入 `cancelled_at` 和取消原因。
+3. 根据 `order_item` 恢复商品库存。
+4. 事务成功后确认消息；处理失败时不应确认消息，由消息容器按照重试和拒绝策略处理。
+
+如果订单已经支付、已经手动取消或消息重复投递，消费者直接结束处理，不重复取消订单或恢复库存。前端倒计时只用于展示，不能作为实际取消依据。
 
 ## 10. 评价接口
 
@@ -1135,6 +1174,24 @@ GET /api/users/me/reviews/pending
 是否需要登录：是。
 
 查询 `pending_review` 订单中的 `order_item`，排除已经存在于 `product_review` 的订单商品。
+
+响应 `data` 为待评价商品列表：
+
+```json
+[
+  {
+    "orderId": "60001",
+    "orderNo": "OM202609050001",
+    "orderItemId": "61001",
+    "productId": "20001",
+    "productName": "晨雾白跑鞋",
+    "productImage": "https://example.com/product-cover.jpg",
+    "unitPrice": 239.00,
+    "quantity": 1,
+    "lineAmount": 239.00
+  }
+]
+```
 
 ### 10.2 提交订单评价
 
@@ -1169,6 +1226,18 @@ POST /api/orders/{orderId}/reviews
 - 同一用户不能重复评价同一订单商品
 
 评价成功后更新商品的 `rating_avg` 和 `review_count`。订单所有商品都完成评价后，可以将订单状态更新为 `completed`，并写入 `completed_at`。
+
+成功响应 `data`：
+
+```json
+{
+  "orderId": "60001",
+  "orderNo": "OM202609050001",
+  "status": "completed",
+  "reviewIds": ["50001"],
+  "completedAt": "2026-09-05T12:40:00.000Z"
+}
+```
 
 本版本不提供评价图片或视频上传接口。
 
