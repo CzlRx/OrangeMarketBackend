@@ -24,12 +24,12 @@ import tools.jackson.databind.ObjectMapper;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 @Service
 public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
@@ -57,7 +57,7 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
         BufferedImage bufferedImage = captchaProducer.createImage(captchaText);
 
         String redisKey = "auth:captcha:" + captchaKey;
-        redisTemplate.opsForValue().set(redisKey, captchaText, 30, TimeUnit.SECONDS);
+        redisTemplate.opsForValue().set(redisKey, captchaText, Duration.ofSeconds(30));
 
         String imageBase64 = bufferedImageToBase64(bufferedImage);
 
@@ -80,16 +80,16 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
         if(s == null){
             throw new BusinessException(ResultCode.NOT_FOUND,"图形验证码已过期");
         }else {
-            if(s.equals(smsRequest.getCaptchaCode())){
+            if(!s.equals(smsRequest.getCaptchaCode())){
                 throw new BusinessException(ResultCode.BAD_REQUEST,"图形验证码错误");
             }
         }
         if(redisTemplate.opsForValue().get("auth:sms:limit:" + smsRequest.getPhone()) != null){
             throw new BusinessException(ResultCode.TOO_MANY_REQUESTS,"验证码请求过于频繁");
         }
-        redisTemplate.opsForValue().set("auth:sms:limit:"+smsRequest.getPhone(),smsRequest.getPhone(),60,TimeUnit.SECONDS);
+        redisTemplate.opsForValue().set("auth:sms:limit:"+smsRequest.getPhone(),smsRequest.getPhone(), Duration.ofSeconds(60));
         //目前验证码先都默认为1234
-        redisTemplate.opsForValue().set("auth:sms:1234",smsRequest.getPhone(),300,TimeUnit.SECONDS);
+        redisTemplate.opsForValue().set("auth:sms:1234",smsRequest.getPhone(), Duration.ofSeconds(300));
         return new SmsInfo(60,300);
     }
 
@@ -153,7 +153,7 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
             Long userId = userAccount.getId();
             String redisKey = AuthRedisKey.login(userId, sessionId);
             redisTemplate.opsForHash().putAll(redisKey, toRedisHash(map));
-            redisTemplate.expire(redisKey, 86400, TimeUnit.SECONDS);  // 24 小时过期
+            redisTemplate.expire(redisKey, Duration.ofSeconds(86400));  // 24 小时过期
 
             // 5. 生成 JWT token
             // JWT 包含：sessionId（用于查 Redis）、userId、phone
