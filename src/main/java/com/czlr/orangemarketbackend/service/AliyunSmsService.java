@@ -81,11 +81,26 @@ public class AliyunSmsService {
         try {
             CheckSmsVerifyCodeResponse response = dypnsApiClient.checkSmsVerifyCode(request);
             String code = response.getBody().getCode();
+            String message = response.getBody().getMessage();
+            Boolean success = response.getBody().getSuccess();
+            // 该 SDK 版本的响应体不含 requestId 字段，RequestId 在 HTTP 响应头中
+            String requestId = response.getHeaders() != null
+                    ? response.getHeaders().get("x-acs-request-id") : null;
+            String verifyResult = response.getBody().getModel() != null
+                    ? response.getBody().getModel().getVerifyResult() : null;
             if (!"OK".equals(code)) {
-                log.warn("阿里云短信验证码核验失败 phone={} code={} message={}", phone, code, response.getBody().getMessage());
+                log.warn("阿里云短信验证码核验失败 phone={} code={} message={} requestId={}",
+                        phone, code, message, requestId);
                 return false;
             }
-            return "true".equalsIgnoreCase(response.getBody().getModel().getVerifyResult());
+            // 阿里云号码认证服务核验通过时返回 "PASS"（部分版本/场景返回 "true"），两者都视为通过
+            boolean ok = "PASS".equalsIgnoreCase(verifyResult) || "true".equalsIgnoreCase(verifyResult);
+            if (!ok) {
+                // 阿里云接口调用成功但判定验证码无效：通常是验证码过期、已被新验证码作废、或输入不匹配
+                log.warn("阿里云短信验证码核验未通过 phone={} verifyResult={} success={} message={} requestId={}",
+                        phone, verifyResult, success, message, requestId);
+            }
+            return ok;
         } catch (Exception e) {
             log.error("阿里云短信验证码核验异常 phone={}", phone, e);
             return false;

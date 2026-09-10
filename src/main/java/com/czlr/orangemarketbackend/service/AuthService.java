@@ -61,7 +61,8 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
         BufferedImage bufferedImage = captchaProducer.createImage(captchaText);
 
         String redisKey = "auth:captcha:" + captchaKey;
-        redisTemplate.opsForValue().set(redisKey, captchaText, Duration.ofSeconds(30));
+        // 有效期 5 分钟：页面打开时即自动获取验证码，30 秒过短，用户正常输入都可能超时
+        redisTemplate.opsForValue().set(redisKey, captchaText, Duration.ofSeconds(300));
 
         String imageBase64 = bufferedImageToBase64(bufferedImage);
 
@@ -80,18 +81,23 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
     }
 
     public SmsInfo sendSms(SmsRequest smsRequest){
-        String s = (String) redisTemplate.opsForValue().get("auth:captcha:" + smsRequest.getCaptchaKey());
+        String captchaRedisKey = "auth:captcha:" + smsRequest.getCaptchaKey();
+        String s = (String) redisTemplate.opsForValue().get(captchaRedisKey);
         if(s == null){
-            throw new BusinessException(ResultCode.NOT_FOUND,"图形验证码已过期");
-        }else {
-            if(!s.equals(smsRequest.getCaptchaCode())){
-                throw new BusinessException(ResultCode.BAD_REQUEST,"图形验证码错误");
-            }
+            throw new BusinessException(ResultCode.NOT_FOUND,"图形验证码已过期，请刷新后重试");
         }
-        if(redisTemplate.opsForValue().get("auth:sms:limit:" + smsRequest.getPhone()) != null){
+        // 图形验证码一次性使用：取出后立即删除，防止同一个验证码被重复利用
+        redisTemplate.delete(captchaRedisKey);
+        // 验证码图片字符为大写，用户可能输入小写，比较时忽略大小写
+        if(!s.equalsIgnoreCase(smsRequest.getCaptchaCode())){
+            throw new BusinessException(ResultCode.BAD_REQUEST,"图形验证码错误");
+        }
+        // 60 秒频控：使用 setIfAbsent（SET NX）原子操作，避免并发/重复点击时两次请求都通过检查导致重复发短信
+        String limitKey = "auth:sms:limit:" + smsRequest.getPhone();
+        Boolean allowed = redisTemplate.opsForValue().setIfAbsent(limitKey, smsRequest.getPhone(), Duration.ofSeconds(60));
+        if (!Boolean.TRUE.equals(allowed)){
             throw new BusinessException(ResultCode.TOO_MANY_REQUESTS,"验证码请求过于频繁");
         }
-        redisTemplate.opsForValue().set("auth:sms:limit:"+smsRequest.getPhone(),smsRequest.getPhone(), Duration.ofSeconds(60));
         // 通过阿里云号码认证服务真实下发验证码（验证码由阿里云生成并托管，校验时直接调云端接口）
         aliyunSmsService.sendVerifyCode(smsRequest.getPhone());
         return new SmsInfo(60,300);
