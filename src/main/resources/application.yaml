@@ -42,3 +42,10 @@ mybatis-plus:
 jwt:
   secret: orange-market-secret-key-must-be-at-least-256-bits-long-for-hs256-algorithm
   expiration: 86400
+
+aliyun:
+  sms:
+    access-key-id: ${ALIYUN_SMS_ACCESS_KEY_ID:}
+    access-key-secret: ${ALIYUN_SMS_ACCESS_KEY_SECRET:}
+    sign-name: ${ALIYUN_SMS_SIGN_NAME:恒创联众}
+    template-code: ${ALIYUN_SMS_TEMPLATE_CODE:100001}

@@ -42,13 +42,17 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
 
     private final JwtUtil jwtUtil;
 
+    private final AliyunSmsService aliyunSmsService;
+
     public AuthService(
             @Qualifier("redisTemplate") RedisTemplate<String, Object> redisTemplate,
-            Producer captchaProducer, UserAccountMapper userAccountMapper, JwtUtil jwtUtil) {
+            Producer captchaProducer, UserAccountMapper userAccountMapper, JwtUtil jwtUtil,
+            AliyunSmsService aliyunSmsService) {
         this.redisTemplate = redisTemplate;
         this.captchaProducer = captchaProducer;
         this.userAccountMapper = userAccountMapper;
         this.jwtUtil = jwtUtil;
+        this.aliyunSmsService = aliyunSmsService;
     }
 
     public CaptchaDTO getCaptcha() {
@@ -88,8 +92,8 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
             throw new BusinessException(ResultCode.TOO_MANY_REQUESTS,"验证码请求过于频繁");
         }
         redisTemplate.opsForValue().set("auth:sms:limit:"+smsRequest.getPhone(),smsRequest.getPhone(), Duration.ofSeconds(60));
-        //目前验证码先都默认为1234
-        redisTemplate.opsForValue().set("auth:sms:1234",smsRequest.getPhone(), Duration.ofSeconds(300));
+        // 通过阿里云号码认证服务真实下发验证码（验证码由阿里云生成并托管，校验时直接调云端接口）
+        aliyunSmsService.sendVerifyCode(smsRequest.getPhone());
         return new SmsInfo(60,300);
     }
 
@@ -114,7 +118,7 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
      */
     public LoginDTO login(LoginRequest loginRequest){
         // 1. 验证短信验证码
-        if (checkSms(loginRequest.getSmsCode())){
+        if (checkSms(loginRequest.getPhone(), loginRequest.getSmsCode())){
             // 2. 生成 sessionId（用于 Redis 存储）
             String sessionId = UUID.randomUUID().toString();
             boolean isNewUser;
@@ -180,9 +184,9 @@ public class AuthService extends ServiceImpl<UserAccountMapper,UserAccount> {
         return stringValues;
     }
 
-    public boolean checkSms(String smscode){
-        String s = (String) redisTemplate.opsForValue().get("auth:sms:" + smscode);
-        if(s == null){
+    public boolean checkSms(String phone, String smscode){
+        // 调用阿里云号码认证服务核验验证码
+        if (!aliyunSmsService.checkVerifyCode(phone, smscode)){
             throw new BusinessException(ResultCode.SMS_CODE_INVALID);
         }
         return true;
