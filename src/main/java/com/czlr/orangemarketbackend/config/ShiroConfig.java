@@ -121,6 +121,9 @@ public class ShiroConfig {
         filterChainDefinitionMap.put("/api/products", "anon");
         filterChainDefinitionMap.put("/api/products/**", "anon");
 
+        // WebSocket 握手鉴权在 ServiceWebSocketAuthInterceptor 中完成
+        filterChainDefinitionMap.put("/ws/**", "anon");
+
         // 2. 其他所有 /api/** 接口都需要 JWT 认证
         filterChainDefinitionMap.put("/api/**", "statelessAuth");
 
