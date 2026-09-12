@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>断开后延迟确认，避免握手关闭与立刻重连交叉。
  * 仅在确实写入过系统消息时才更新宣告状态，避免无会话时的断开把下次连上当成「重新进入」。
+ * 同一身份的状态变更串行化，避免 Strict Mode / 快速重连并发写出重复系统消息。
  */
 @Component
 public class ServiceWsPresenceCoordinator {
@@ -35,6 +36,7 @@ public class ServiceWsPresenceCoordinator {
     /** true=已宣告进入/在线，false=已宣告离开 */
     private final ConcurrentHashMap<String, Boolean> announcedOnline = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingLeave = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
 
     public ServiceWsPresenceCoordinator(
             ServiceSessionService serviceSessionService,
@@ -48,16 +50,18 @@ public class ServiceWsPresenceCoordinator {
             return;
         }
         String key = presenceKey(userId, agent);
-        cancelPendingLeave(key);
-        Boolean previous = announcedOnline.get(key);
-        if (Boolean.TRUE.equals(previous)) {
-            return;
-        }
-        WsPresenceKind kind = Boolean.FALSE.equals(previous)
-                ? WsPresenceKind.REJOIN
-                : WsPresenceKind.JOIN;
-        if (notifyQuietly(userId, agent, kind)) {
-            announcedOnline.put(key, true);
+        synchronized (lockOf(key)) {
+            cancelPendingLeave(key);
+            Boolean previous = announcedOnline.get(key);
+            if (Boolean.TRUE.equals(previous)) {
+                return;
+            }
+            WsPresenceKind kind = Boolean.FALSE.equals(previous)
+                    ? WsPresenceKind.REJOIN
+                    : WsPresenceKind.JOIN;
+            if (notifyQuietly(userId, agent, kind)) {
+                announcedOnline.put(key, true);
+            }
         }
     }
 
@@ -66,24 +70,40 @@ public class ServiceWsPresenceCoordinator {
             return;
         }
         String key = presenceKey(userId, agent);
-        ScheduledFuture<?> next = scheduler.schedule(() -> {
-            pendingLeave.remove(key);
-            if (sessionRegistry.isOnline(userId, agent)) {
+        synchronized (lockOf(key)) {
+            // 从未宣告在线，或已经宣告离开：不再重复发离开
+            Boolean previous = announcedOnline.get(key);
+            if (!Boolean.TRUE.equals(previous)) {
+                cancelPendingLeave(key);
                 return;
             }
-            if (notifyQuietly(userId, agent, WsPresenceKind.LEAVE)) {
-                announcedOnline.put(key, false);
+            ScheduledFuture<?> next = scheduler.schedule(() -> confirmLeave(userId, agent, key),
+                    LEAVE_DELAY_MS, TimeUnit.MILLISECONDS);
+            ScheduledFuture<?> old = pendingLeave.put(key, next);
+            if (old != null) {
+                old.cancel(false);
             }
-        }, LEAVE_DELAY_MS, TimeUnit.MILLISECONDS);
-        ScheduledFuture<?> old = pendingLeave.put(key, next);
-        if (old != null) {
-            old.cancel(false);
         }
     }
 
     @PreDestroy
     public void shutdown() {
         scheduler.shutdownNow();
+    }
+
+    private void confirmLeave(Long userId, boolean agent, String key) {
+        synchronized (lockOf(key)) {
+            pendingLeave.remove(key);
+            if (sessionRegistry.isOnline(userId, agent)) {
+                return;
+            }
+            if (!Boolean.TRUE.equals(announcedOnline.get(key))) {
+                return;
+            }
+            if (notifyQuietly(userId, agent, WsPresenceKind.LEAVE)) {
+                announcedOnline.put(key, false);
+            }
+        }
     }
 
     private void cancelPendingLeave(String key) {
@@ -105,5 +125,9 @@ public class ServiceWsPresenceCoordinator {
 
     private String presenceKey(Long userId, boolean agent) {
         return (agent ? "a:" : "u:") + userId;
+    }
+
+    private Object lockOf(String key) {
+        return locks.computeIfAbsent(key, ignored -> new Object());
     }
 }

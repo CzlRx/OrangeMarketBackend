@@ -43,9 +43,17 @@ log/
 ### 系统文件 ###
 .DS_Store
 Thumbs.db
+
 ### 文档 ###
 DATABASE_DESIGN.md
-
 改动记录.md
 
-../.probe/
+### 本地探测/编译产物 ###
+.probe/
+*.class
+
+### 本地密钥与环境变量 ###
+.env
+.env.*
+!.env.example
+.local-test-tokens.txt
