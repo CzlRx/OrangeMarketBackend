@@ -103,6 +103,9 @@ public class ShiroConfig {
     public ShiroFilterFactoryBean shiroFilterFactoryBean(SecurityManager securityManager) {
         ShiroFilterFactoryBean shiroFilter = new ShiroFilterFactoryBean();
         shiroFilter.setSecurityManager(securityManager);
+        // 禁止默认跳转到 /login.jsp（WebSocket 握手被拦时会变成 302，客户端报 non-101）
+        shiroFilter.setLoginUrl("/api/auth/unauthorized");
+        shiroFilter.setUnauthorizedUrl("/api/auth/unauthorized");
 
         // 注册自定义过滤器（使用 Jakarta EE）
         Map<String, Filter> filters = new LinkedHashMap<>();
@@ -116,16 +119,21 @@ public class ShiroConfig {
         filterChainDefinitionMap.put("/api/auth/login", "anon");
         filterChainDefinitionMap.put("/api/auth/sms/send", "anon");
         filterChainDefinitionMap.put("/api/auth/captcha", "anon");
+        filterChainDefinitionMap.put("/api/auth/unauthorized", "anon");
 
         filterChainDefinitionMap.put("/api/categories", "anon");
         filterChainDefinitionMap.put("/api/products", "anon");
         filterChainDefinitionMap.put("/api/products/**", "anon");
 
-        // WebSocket 握手鉴权在 ServiceWebSocketAuthInterceptor 中完成
+        // WebSocket：必须 anon。JWT 在 ServiceWebSocketAuthInterceptor 校验
+        filterChainDefinitionMap.put("/ws/service", "anon");
         filterChainDefinitionMap.put("/ws/**", "anon");
 
         // 2. 其他所有 /api/** 接口都需要 JWT 认证
         filterChainDefinitionMap.put("/api/**", "statelessAuth");
+
+        // 3. 其余路径匿名，避免未匹配规则时落到 Shiro 默认登录跳转
+        filterChainDefinitionMap.put("/**", "anon");
 
         shiroFilter.setFilterChainDefinitionMap(filterChainDefinitionMap);
 

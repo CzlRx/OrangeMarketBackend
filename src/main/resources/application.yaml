@@ -18,8 +18,8 @@ spring:
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USERNAME:guest}
-    password: ${RABBITMQ_PASSWORD:guest}
+    username: ${RABBITMQ_USERNAME:czlr}
+    password: ${RABBITMQ_PASSWORD:123456}
     virtual-host: ${RABBITMQ_VIRTUAL_HOST:/}
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver

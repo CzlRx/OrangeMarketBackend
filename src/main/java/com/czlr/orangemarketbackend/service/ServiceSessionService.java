@@ -145,7 +145,7 @@ public class ServiceSessionService {
 
     @Transactional
     public void closeByUser(Long userId, Long sessionId) {
-        close(requireUserSession(userId, sessionId));
+        close(requireUserSession(userId, sessionId), ServiceMessageSenderType.USER, userId);
     }
 
     @Transactional
@@ -154,7 +154,7 @@ public class ServiceSessionService {
         if (!Objects.equals(session.getAgentId(), agentId)) {
             throw new BusinessException(ResultCode.FORBIDDEN, "只能关闭自己接待的会话");
         }
-        close(session);
+        close(session, ServiceMessageSenderType.AGENT, agentId);
     }
 
     public ServiceMessagePageDTO listMessagesForUser(Long userId, Long sessionId, int page, int pageSize) {
@@ -199,7 +199,64 @@ public class ServiceSessionService {
         return toMessageDto(message);
     }
 
-    private void close(ServiceSession session) {
+    public enum WsPresenceKind {
+        JOIN,
+        REJOIN,
+        LEAVE
+    }
+
+    /**
+     * WebSocket 在线状态变化：对相关进行中会话写系统消息并推送。
+     *
+     * @return 是否实际写入了系统消息（没有进行中会话时为 false）
+     */
+    @Transactional
+    public boolean notifyWsPresence(Long personId, boolean asAgent, WsPresenceKind kind) {
+        if (personId == null || kind == null) {
+            return false;
+        }
+        List<ServiceSession> sessions = asAgent
+                ? listActiveByAgent(personId)
+                : listActiveByUser(personId);
+        if (sessions.isEmpty()) {
+            return false;
+        }
+
+        String content = presenceText(asAgent, kind);
+        for (ServiceSession session : sessions) {
+            ServiceMessage message = insertMessage(
+                    session.getId(), ServiceMessageSenderType.SYSTEM, null, content);
+            pushToSessionMembers(session, chatEvent(message));
+        }
+        return true;
+    }
+
+    private String presenceText(boolean asAgent, WsPresenceKind kind) {
+        return switch (kind) {
+            case JOIN -> asAgent ? "客服已进入会话" : "用户已进入会话";
+            case REJOIN -> asAgent ? "客服已重新进入会话" : "用户已重新进入会话";
+            case LEAVE -> asAgent ? "客服已离开会话" : "用户已离开会话";
+        };
+    }
+
+    private List<ServiceSession> listActiveByUser(Long userId) {
+        return serviceSessionMapper.selectList(new LambdaQueryWrapper<ServiceSession>()
+                .eq(ServiceSession::getUserId, userId)
+                .eq(ServiceSession::getStatus, ServiceSessionStatus.ACTIVE)
+                .orderByDesc(ServiceSession::getId));
+    }
+
+    private List<ServiceSession> listActiveByAgent(Long agentId) {
+        return serviceSessionMapper.selectList(new LambdaQueryWrapper<ServiceSession>()
+                .eq(ServiceSession::getAgentId, agentId)
+                .eq(ServiceSession::getStatus, ServiceSessionStatus.ACTIVE)
+                .orderByDesc(ServiceSession::getId));
+    }
+
+    private void close(
+            ServiceSession session,
+            ServiceMessageSenderType closedBy,
+            Long closerId) {
         if (session.getStatus() != ServiceSessionStatus.ACTIVE) {
             throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "会话已关闭");
         }
@@ -214,7 +271,12 @@ public class ServiceSessionService {
         }
         session.setStatus(ServiceSessionStatus.CLOSED);
         session.setClosedAt(closedAt);
-        pushToSessionMembers(session, closedEvent(session));
+        String content = closedBy == ServiceMessageSenderType.AGENT
+                ? "客服已结束会话"
+                : "用户已结束会话";
+        ServiceMessage notice = insertMessage(
+                session.getId(), ServiceMessageSenderType.SYSTEM, closerId, content);
+        pushToSessionMembers(session, closedEvent(session, closedBy, closerId, notice));
     }
 
     private ServiceMessagePageDTO listMessages(Long sessionId, int page, int pageSize) {
@@ -301,10 +363,24 @@ public class ServiceSessionService {
         return objectMapper.writeValueAsString(node);
     }
 
-    private String closedEvent(ServiceSession session) {
+    private String closedEvent(
+            ServiceSession session,
+            ServiceMessageSenderType closedBy,
+            Long closerId,
+            ServiceMessage notice) {
         ObjectNode node = objectMapper.createObjectNode();
         node.put("type", "session_closed");
         node.put("sessionId", String.valueOf(session.getId()));
+        node.put("closedBy", closedBy.getValue());
+        if (closerId != null) {
+            node.put("closerId", String.valueOf(closerId));
+        }
+        node.put("messageId", String.valueOf(notice.getId()));
+        node.put("senderType", ServiceMessageSenderType.SYSTEM.getValue());
+        node.put("content", notice.getContent());
+        if (notice.getCreatedAt() != null) {
+            node.put("createdAt", notice.getCreatedAt().toString());
+        }
         return objectMapper.writeValueAsString(node);
     }
 

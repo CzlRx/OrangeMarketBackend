@@ -26,14 +26,17 @@ public class ServiceWebSocketHandler extends TextWebSocketHandler {
     private final ServiceWebSocketSessionRegistry sessionRegistry;
     private final ObjectMapper objectMapper;
     private final ServiceSessionService serviceSessionService;
+    private final ServiceWsPresenceCoordinator presenceCoordinator;
 
     public ServiceWebSocketHandler(
             ServiceWebSocketSessionRegistry sessionRegistry,
             ObjectMapper objectMapper,
-            ServiceSessionService serviceSessionService) {
+            ServiceSessionService serviceSessionService,
+            ServiceWsPresenceCoordinator presenceCoordinator) {
         this.sessionRegistry = sessionRegistry;
         this.objectMapper = objectMapper;
         this.serviceSessionService = serviceSessionService;
+        this.presenceCoordinator = presenceCoordinator;
     }
 
     @Override
@@ -54,6 +57,8 @@ public class ServiceWebSocketHandler extends TextWebSocketHandler {
         connected.put("userId", userId);
         connected.put("agent", agent);
         sendJson(session, connected);
+
+        presenceCoordinator.onConnected(userId, agent);
     }
 
     @Override
@@ -92,16 +97,26 @@ public class ServiceWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        sessionRegistry.unregister(session);
         Long userId = (Long) session.getAttributes().get(ServiceWebSocketAttributes.USER_ID);
-        log.info("service ws closed, userId={}, sessionId={}, status={}",
-                userId, session.getId(), status);
+        Boolean agent = (Boolean) session.getAttributes().get(ServiceWebSocketAttributes.IS_AGENT);
+        boolean wentOffline = sessionRegistry.unregister(session);
+        log.info("service ws closed, userId={}, sessionId={}, status={}, wentOffline={}",
+                userId, session.getId(), status, wentOffline);
+        if (userId != null && agent != null) {
+            presenceCoordinator.onDisconnected(userId, agent, wentOffline);
+        }
     }
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.warn("service ws transport error, sessionId={}", session.getId(), exception);
-        sessionRegistry.unregister(session);
+        if (session.isOpen()) {
+            try {
+                session.close(CloseStatus.SERVER_ERROR);
+            } catch (IOException ignored) {
+                // afterConnectionClosed 会做清理
+            }
+        }
     }
 
     /**
