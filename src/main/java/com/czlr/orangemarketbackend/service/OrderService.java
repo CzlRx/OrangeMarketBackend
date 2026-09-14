@@ -370,7 +370,10 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
 
     private void decreaseStock(List<OrderLine> lines) {
         for (OrderLine line : lines) {
-            productMapper.decreaseStock(String.valueOf(line.product().getId()), line.quantity());
+            int updated = productMapper.decreaseStock(line.product().getId(), line.quantity());
+            if (updated == 0) {
+                throw new BusinessException(ResultCode.CONFLICT, "商品库存不足");
+            }
         }
     }
 

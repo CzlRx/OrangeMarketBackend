@@ -18,13 +18,16 @@ import com.czlr.orangemarketbackend.mapper.ServiceMessageMapper;
 import com.czlr.orangemarketbackend.mapper.ServiceSessionMapper;
 import com.czlr.orangemarketbackend.mapper.UserAccountMapper;
 import com.czlr.orangemarketbackend.websocket.ServiceWebSocketSessionRegistry;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -60,15 +63,27 @@ public class ServiceSessionService {
 
     @Transactional
     public ServiceSessionDTO createOrGetActive(Long userId) {
-        ServiceSession existing = findActiveByUser(userId);
-        if (existing != null) {
-            return toSessionDto(existing, nicknameOf(existing.getUserId()));
+        // 锁用户行，避免并发 POST（例如 React StrictMode 双调用）各插一条 active 会话
+        lockUser(userId);
+        List<ServiceSession> actives = listActiveByUser(userId);
+        if (!actives.isEmpty()) {
+            ServiceSession keep = actives.get(0);
+            closeExtraUnclaimed(actives, keep.getId());
+            return toSessionDto(keep, nicknameOf(keep.getUserId()));
         }
 
         ServiceSession session = new ServiceSession();
         session.setUserId(userId);
         session.setStatus(ServiceSessionStatus.ACTIVE);
-        serviceSessionMapper.insert(session);
+        try {
+            serviceSessionMapper.insert(session);
+        } catch (DuplicateKeyException ignored) {
+            ServiceSession existing = findActiveByUser(userId);
+            if (existing != null) {
+                return toSessionDto(existing, nicknameOf(existing.getUserId()));
+            }
+            throw new BusinessException(ResultCode.CONFLICT, "创建客服会话失败，请稍后重试");
+        }
         return toSessionDto(session, nicknameOf(userId));
     }
 
@@ -84,8 +99,10 @@ public class ServiceSessionService {
         return toSessionDto(requireUserSession(userId, sessionId), nicknameOf(userId));
     }
 
+    @Transactional
     public ServiceSessionPageDTO listLobby(int page, int pageSize) {
         validatePage(page, pageSize);
+        repairDuplicateUnclaimedActives();
         Page<ServiceSession> result = serviceSessionMapper.selectPage(
                 new Page<>(page, pageSize),
                 new LambdaQueryWrapper<ServiceSession>()
@@ -293,6 +310,54 @@ public class ServiceSessionService {
         return new ServiceMessagePageDTO(list, total, page, pageSize, (long) page * pageSize < total);
     }
 
+    private void lockUser(Long userId) {
+        UserAccount user = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
+                .eq(UserAccount::getId, userId)
+                .last("FOR UPDATE"));
+        if (user == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "用户不存在");
+        }
+    }
+
+    /** 同一用户若有多条未接单 active，只保留最新一条，其余关闭 */
+    private void repairDuplicateUnclaimedActives() {
+        List<ServiceSession> unclaimed = serviceSessionMapper.selectList(
+                new LambdaQueryWrapper<ServiceSession>()
+                        .eq(ServiceSession::getStatus, ServiceSessionStatus.ACTIVE)
+                        .isNull(ServiceSession::getAgentId)
+                        .orderByDesc(ServiceSession::getId));
+        LinkedHashMap<Long, ServiceSession> keepByUser = new LinkedHashMap<>();
+        List<Long> extraIds = new ArrayList<>();
+        for (ServiceSession session : unclaimed) {
+            if (keepByUser.putIfAbsent(session.getUserId(), session) != null) {
+                extraIds.add(session.getId());
+            }
+        }
+        closeUnclaimedByIds(extraIds);
+    }
+
+    private void closeExtraUnclaimed(List<ServiceSession> actives, Long keepId) {
+        List<Long> extraIds = actives.stream()
+                .filter(session -> !Objects.equals(session.getId(), keepId))
+                .filter(session -> session.getAgentId() == null)
+                .map(ServiceSession::getId)
+                .toList();
+        closeUnclaimedByIds(extraIds);
+    }
+
+    private void closeUnclaimedByIds(List<Long> extraIds) {
+        if (extraIds.isEmpty()) {
+            return;
+        }
+        LocalDateTime closedAt = LocalDateTime.now();
+        serviceSessionMapper.update(null, new LambdaUpdateWrapper<ServiceSession>()
+                .in(ServiceSession::getId, extraIds)
+                .eq(ServiceSession::getStatus, ServiceSessionStatus.ACTIVE)
+                .isNull(ServiceSession::getAgentId)
+                .set(ServiceSession::getStatus, ServiceSessionStatus.CLOSED)
+                .set(ServiceSession::getClosedAt, closedAt));
+    }
+
     private ServiceSession findActiveByUser(Long userId) {
         return serviceSessionMapper.selectOne(new LambdaQueryWrapper<ServiceSession>()
                 .eq(ServiceSession::getUserId, userId)
@@ -336,6 +401,9 @@ public class ServiceSessionService {
         sessionRegistry.sendToUser(session.getUserId(), payload);
         if (session.getAgentId() != null) {
             sessionRegistry.sendToAgent(session.getAgentId(), payload);
+        } else {
+            // 未接单时大厅客服也要能实时看到用户消息，不能等刷新历史
+            sessionRegistry.broadcastToAgents(payload);
         }
     }
 
