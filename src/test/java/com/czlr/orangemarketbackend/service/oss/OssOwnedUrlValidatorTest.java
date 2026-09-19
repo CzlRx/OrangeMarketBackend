@@ -56,4 +56,17 @@ class OssOwnedUrlValidatorTest {
         assertThrows(BusinessException.class,
                 () -> validator.requireOwnedUrl("https://cdn.example.com/avatars/10001/a.png?x=1", "avatars/10001/"));
     }
+
+    @Test
+    void acceptsLocalRelativeUploadUrl() {
+        String url = validator.requireOwnedUrl("/api/uploads/files/avatars/10001/abc.png", "avatars/10001/");
+        assertEquals("/api/uploads/files/avatars/10001/abc.png", url);
+    }
+
+    @Test
+    void rejectsLocalRelativeWrongPrefix() {
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> validator.requireOwnedUrl("/api/uploads/files/products/a.png", "avatars/10001/"));
+        assertEquals(ResultCode.BAD_REQUEST, ex.getResultCode());
+    }
 }

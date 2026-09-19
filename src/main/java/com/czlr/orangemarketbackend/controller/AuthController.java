@@ -48,5 +48,4 @@ public class AuthController {
         UserAccount userInfo = authService.getMe(sessionId, userId);
         return Result.success(userInfo);
     }
-
 }

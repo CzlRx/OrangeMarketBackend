@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: OrangeMarketBackend
+  servlet:
+    multipart:
+      max-file-size: 6MB
+      max-request-size: 6MB
   data:
     redis:
       host: ${REDIS_HOST:localhost}

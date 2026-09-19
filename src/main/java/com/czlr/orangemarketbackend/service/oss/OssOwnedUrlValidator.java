@@ -11,6 +11,8 @@ import java.util.Locale;
 @Component
 public class OssOwnedUrlValidator {
 
+    private static final String LOCAL_FILE_PREFIX = LocalImageUploadService.PUBLIC_PATH_PREFIX;
+
     private final AliyunOssProperties properties;
 
     public OssOwnedUrlValidator(AliyunOssProperties properties) {
@@ -21,12 +23,19 @@ public class OssOwnedUrlValidator {
         if (url == null || url.isBlank()) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "图片地址不能为空");
         }
+        String trimmed = url.trim();
         URI uri;
         try {
-            uri = URI.create(url.trim());
+            uri = URI.create(trimmed);
         } catch (IllegalArgumentException e) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "图片地址格式错误");
         }
+
+        String localObjectKey = localObjectKeyOf(uri, trimmed);
+        if (localObjectKey != null) {
+            return requireObjectKey(localObjectKey, requiredPathPrefix, LOCAL_FILE_PREFIX + localObjectKey);
+        }
+
         if (uri.getScheme() == null || uri.getHost() == null) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "图片地址格式错误");
         }
@@ -39,16 +48,10 @@ public class OssOwnedUrlValidator {
         }
 
         String objectKey = objectKeyOf(uri);
-        if (objectKey.contains("..") || objectKey.contains("\\")) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "图片地址不属于本存储空间");
-        }
         if (!matchesAllowedBase(uri)) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "图片地址不属于本存储空间");
         }
-        if (requiredPathPrefix != null && !objectKey.startsWith(requiredPathPrefix)) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "图片地址不属于本存储空间");
-        }
-        return properties.toAccessUrl(objectKey);
+        return requireObjectKey(objectKey, requiredPathPrefix, properties.toAccessUrl(objectKey));
     }
 
     public String objectKeyOf(URI uri) {
@@ -56,10 +59,72 @@ public class OssOwnedUrlValidator {
         if (path.startsWith("/")) {
             path = path.substring(1);
         }
+        if (path.startsWith(LOCAL_FILE_PREFIX.substring(1))) {
+            path = path.substring(LOCAL_FILE_PREFIX.length() - 1);
+        }
         if (path.isBlank()) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "图片地址不属于本存储空间");
         }
         return path;
+    }
+
+    private String requireObjectKey(String objectKey, String requiredPathPrefix, String canonicalUrl) {
+        if (objectKey.contains("..") || objectKey.contains("\\") || objectKey.startsWith("/")) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "图片地址不属于本存储空间");
+        }
+        if (requiredPathPrefix != null && !objectKey.startsWith(requiredPathPrefix)) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "图片地址不属于本存储空间");
+        }
+        return canonicalUrl;
+    }
+
+    private String localObjectKeyOf(URI uri, String original) {
+        if (uri.getRawQuery() != null || uri.getRawFragment() != null) {
+            return null;
+        }
+        if (uri.getScheme() == null && uri.getHost() == null) {
+            if (original.startsWith("//") || !original.startsWith(LOCAL_FILE_PREFIX)) {
+                return null;
+            }
+            return original.substring(LOCAL_FILE_PREFIX.length());
+        }
+        if (uri.getHost() == null || !isLocalDevHost(uri.getHost())) {
+            return null;
+        }
+        String path = uri.getPath() == null ? "" : uri.getPath();
+        if (!path.startsWith(LOCAL_FILE_PREFIX)) {
+            return null;
+        }
+        return path.substring(LOCAL_FILE_PREFIX.length());
+    }
+
+    private static boolean isLocalDevHost(String host) {
+        String normalized = host.toLowerCase(Locale.ROOT);
+        if ("localhost".equals(normalized)
+                || "127.0.0.1".equals(normalized)
+                || "0.0.0.0".equals(normalized)
+                || "::1".equals(normalized)
+                || normalized.endsWith(".localhost")) {
+            return true;
+        }
+        String[] parts = normalized.split("\\.");
+        if (parts.length != 4) {
+            return false;
+        }
+        int[] octets = new int[4];
+        try {
+            for (int i = 0; i < 4; i++) {
+                octets[i] = Integer.parseInt(parts[i]);
+                if (octets[i] < 0 || octets[i] > 255) {
+                    return false;
+                }
+            }
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        return octets[0] == 10
+                || (octets[0] == 192 && octets[1] == 168)
+                || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31);
     }
 
     private boolean matchesAllowedBase(URI uri) {

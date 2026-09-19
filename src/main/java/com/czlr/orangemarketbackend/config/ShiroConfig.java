@@ -127,6 +127,8 @@ public class ShiroConfig {
 
         // OSS 上传回调由阿里云服务器发起，不能走 JWT
         filterChainDefinitionMap.put("/api/oss/callback", "anon");
+        // 本地回退上传的图片由 <img> 直接请求，不能要求 JWT
+        filterChainDefinitionMap.put("/api/uploads/files/**", "anon");
 
         // WebSocket：必须 anon。JWT 在 ServiceWebSocketAuthInterceptor 校验
         filterChainDefinitionMap.put("/ws/service", "anon");

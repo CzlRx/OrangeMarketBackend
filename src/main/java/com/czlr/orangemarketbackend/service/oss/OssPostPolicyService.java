@@ -8,6 +8,7 @@ import com.czlr.orangemarketbackend.entity.dto.OssSignDTO;
 import com.czlr.orangemarketbackend.entity.dto.OssSignRequest;
 import com.czlr.orangemarketbackend.entity.po.UserAccount;
 import com.czlr.orangemarketbackend.mapper.UserAccountMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -21,6 +22,7 @@ public class OssPostPolicyService {
     private final UserAccountMapper userAccountMapper;
     private final Clock clock;
 
+    @Autowired
     public OssPostPolicyService(
             AliyunOssProperties properties,
             OssStsCredentialProvider stsCredentialProvider,

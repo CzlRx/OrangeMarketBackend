@@ -57,3 +57,6 @@ DATABASE_DESIGN.md
 .env.*
 !.env.example
 .local-test-tokens.txt
+
+### 未配置 OSS 时的本地上传目录 ###
+data/uploads/
