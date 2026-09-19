@@ -5,38 +5,60 @@ import com.czlr.orangemarketbackend.common.ResultCode;
 import com.czlr.orangemarketbackend.common.enums.CommonStatus;
 import com.czlr.orangemarketbackend.common.enums.OrderStatus;
 import com.czlr.orangemarketbackend.common.exception.BusinessException;
+import com.czlr.orangemarketbackend.common.enums.OssUploadScene;
+import com.czlr.orangemarketbackend.entity.dto.AdminProductImagesRequest;
 import com.czlr.orangemarketbackend.entity.dto.AdminShipmentDTO;
 import com.czlr.orangemarketbackend.entity.dto.AdminUserStatusDTO;
+import com.czlr.orangemarketbackend.entity.dto.ProductDTO;
 import com.czlr.orangemarketbackend.entity.dto.ShipOrderRequest;
 import com.czlr.orangemarketbackend.entity.po.Order;
+import com.czlr.orangemarketbackend.entity.po.Product;
 import com.czlr.orangemarketbackend.entity.po.UserAccount;
 import com.czlr.orangemarketbackend.mapper.OrderMapper;
+import com.czlr.orangemarketbackend.mapper.ProductMapper;
 import com.czlr.orangemarketbackend.mapper.UserAccountMapper;
+import com.czlr.orangemarketbackend.service.oss.OssOwnedUrlValidator;
 import com.czlr.orangemarketbackend.utils.AuthRedisKey;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 @Service
 public class AdminService {
 
     private static final int TRACKING_NO_MAX_LENGTH = 128;
+    private static final int MAX_PRODUCT_IMAGES = 20;
 
     private final OrderMapper orderMapper;
     private final UserAccountMapper userAccountMapper;
+    private final ProductMapper productMapper;
+    private final ProductService productService;
+    private final OssOwnedUrlValidator ossOwnedUrlValidator;
+    private final ObjectMapper objectMapper;
     private final RedisTemplate<String, Object> redisTemplate;
 
     public AdminService(
             OrderMapper orderMapper,
             UserAccountMapper userAccountMapper,
+            ProductMapper productMapper,
+            ProductService productService,
+            OssOwnedUrlValidator ossOwnedUrlValidator,
+            ObjectMapper objectMapper,
             @Qualifier("redisTemplate") RedisTemplate<String, Object> redisTemplate) {
         this.orderMapper = orderMapper;
         this.userAccountMapper = userAccountMapper;
+        this.productMapper = productMapper;
+        this.productService = productService;
+        this.ossOwnedUrlValidator = ossOwnedUrlValidator;
+        this.objectMapper = objectMapper;
         this.redisTemplate = redisTemplate;
     }
 
@@ -105,6 +127,55 @@ public class AdminService {
 
         invalidateSessions(userId);
         return new AdminUserStatusDTO(String.valueOf(user.getId()), user.getStatus(), user.getRole());
+    }
+
+    @Transactional
+    public ProductDTO updateProductImages(Long productId, AdminProductImagesRequest request) {
+        validateId(productId, "productId");
+        Product product = productMapper.selectById(productId);
+        if (product == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "商品不存在");
+        }
+
+        List<String> images = normalizeProductImages(request);
+        List<String> ownedImages = new ArrayList<>(images.size());
+        for (String image : images) {
+            ownedImages.add(ossOwnedUrlValidator.requireOwnedUrl(image, OssUploadScene.PRODUCT.getObjectPrefix()));
+        }
+        String coverImage = request.getCoverImage() == null || request.getCoverImage().isBlank()
+                ? ownedImages.getFirst()
+                : ossOwnedUrlValidator.requireOwnedUrl(
+                        request.getCoverImage().trim(), OssUploadScene.PRODUCT.getObjectPrefix());
+
+        product.setCoverImage(coverImage);
+        product.setImagesJson(objectMapper.writeValueAsString(ownedImages));
+        productMapper.updateById(product);
+        productService.invalidateProductCaches(productId);
+        return productService.toProductDTO(product);
+    }
+
+    private List<String> normalizeProductImages(AdminProductImagesRequest request) {
+        if (request == null) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "商品图片不能为空");
+        }
+        List<String> images = new ArrayList<>();
+        if (request.getImages() != null) {
+            for (String image : request.getImages()) {
+                if (image != null && !image.isBlank()) {
+                    images.add(image.trim());
+                }
+            }
+        }
+        if (images.isEmpty() && request.getCoverImage() != null && !request.getCoverImage().isBlank()) {
+            images.add(request.getCoverImage().trim());
+        }
+        if (images.isEmpty()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "商品图片不能为空");
+        }
+        if (images.size() > MAX_PRODUCT_IMAGES) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "商品图片数量不能超过 20 张");
+        }
+        return images;
     }
 
     private String requireTrackingNo(ShipOrderRequest request) {

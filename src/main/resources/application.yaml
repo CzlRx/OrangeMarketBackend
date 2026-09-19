@@ -49,3 +49,13 @@ aliyun:
     access-key-secret: ${ALIYUN_SMS_ACCESS_KEY_SECRET:}
     sign-name: ${ALIYUN_SMS_SIGN_NAME:恒创联众}
     template-code: ${ALIYUN_SMS_TEMPLATE_CODE:100001}
+  oss:
+    access-key-id: ${ALIYUN_OSS_ACCESS_KEY_ID:}
+    access-key-secret: ${ALIYUN_OSS_ACCESS_KEY_SECRET:}
+    sts-role-arn: ${ALIYUN_OSS_STS_ROLE_ARN:}
+    bucket: ${ALIYUN_OSS_BUCKET:}
+    region: ${ALIYUN_OSS_REGION:cn-hangzhou}
+    host: ${ALIYUN_OSS_HOST:}
+    public-base-url: ${ALIYUN_OSS_PUBLIC_BASE_URL:}
+    callback-url: ${ALIYUN_OSS_CALLBACK_URL:}
+    expire-seconds: ${ALIYUN_OSS_EXPIRE_SECONDS:3600}

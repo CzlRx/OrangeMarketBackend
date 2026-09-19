@@ -13,4 +13,5 @@ public class UserProfileUpdateRequest {
     private String nickname;
     private Integer gender;
     private LocalDate birthday;
+    private String avatarUrl;
 }

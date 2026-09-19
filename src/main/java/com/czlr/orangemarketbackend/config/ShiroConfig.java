@@ -125,6 +125,9 @@ public class ShiroConfig {
         filterChainDefinitionMap.put("/api/products", "anon");
         filterChainDefinitionMap.put("/api/products/**", "anon");
 
+        // OSS 上传回调由阿里云服务器发起，不能走 JWT
+        filterChainDefinitionMap.put("/api/oss/callback", "anon");
+
         // WebSocket：必须 anon。JWT 在 ServiceWebSocketAuthInterceptor 校验
         filterChainDefinitionMap.put("/ws/service", "anon");
         filterChainDefinitionMap.put("/ws/**", "anon");
