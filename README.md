@@ -54,6 +54,8 @@ flowchart TB
   SVC --> Redis[(Redis 会话 / 验证码 / 缓存)]
   SVC --> MQ[RabbitMQ<br/>支付超时 30 分钟]
   SVC --> SMS[阿里云短信]
+  SVC --> OSS[阿里云 OSS]
+  FE --> OSS
 ```
 
 | 组件 | 用途 |
@@ -65,6 +67,7 @@ flowchart TB
 | RabbitMQ | 下单后投入延迟队列，超时取消未支付订单 |
 | Kaptcha | 登录前图形验证码 |
 | 阿里云号码认证 | 短信验证码发送与校验 |
+| 阿里云 OSS | STS + PostPolicy 签名直传，上传回调落库 |
 
 主类排除了 Shiro 自动配置，改走自定义 `ShiroConfig` / `StatelessAuthFilter`。
 
@@ -131,11 +134,13 @@ Base path：`http://localhost:8080`
 | `/api/products` | 列表、详情、评价 |
 | `/api/cart` | 购物车 CRUD 与合并 |
 | `/api/users/me` | 资料、地址、收藏、足迹、搜索历史 |
+| `/api/uploads` | OSS PostPolicy 签名直传 |
 | `/api/orders` | 预览、下单、支付、取消、收货 |
 | `/api/users/me/reviews/pending` | 待评价 |
 | `/api/orders/{id}/reviews` | 提交评价 |
 | `/api/service` | 用户客服会话 |
-| `/api/admin` | 发货、封禁 |
+| `/api/oss/callback` | OSS 上传回调（无 JWT） |
+| `/api/admin` | 发货、封禁、商品图 |
 | `/api/admin/service` | 客服大厅、接单、关闭 |
 | `/ws/service?token=` | 客服实时通道 |
 
@@ -206,15 +211,37 @@ java -jar target/OrangeMarketBackend-0.0.1-SNAPSHOT.jar
 | `ALIYUN_SMS_ACCESS_KEY_SECRET` | 短信 SK | 空 |
 | `ALIYUN_SMS_SIGN_NAME` | 短信签名 | `恒创联众` |
 | `ALIYUN_SMS_TEMPLATE_CODE` | 模板 | `100001` |
+| `ALIYUN_OSS_ACCESS_KEY_ID` / `ALIYUN_OSS_ACCESS_KEY_SECRET` | 仅有 `AliyunSTSAssumeRoleAccess` 的 RAM 用户 | 空 |
+| `ALIYUN_OSS_STS_ROLE_ARN` | 仅 `oss:PutObject` 的角色 ARN | 空 |
+| `ALIYUN_OSS_BUCKET` | Bucket 名 | 空 |
+| `ALIYUN_OSS_REGION` | 地域，如 `cn-hangzhou` | `cn-hangzhou` |
+| `ALIYUN_OSS_HOST` | Bucket 域名，不填则按 bucket/region 拼接 | 空 |
+| `ALIYUN_OSS_PUBLIC_BASE_URL` | 展示用域名（CDN 或与 host 相同） | 空（回退 host） |
+| `ALIYUN_OSS_CALLBACK_URL` | 公网可访问的 `https://{api}/api/oss/callback` | 空 |
+| `ALIYUN_OSS_EXPIRE_SECONDS` | PostPolicy 有效期 | `3600` |
 
 JWT 密钥与过期时间在 `application.yaml` 的 `jwt.*`。仓库里的默认值只适合本地，上线务必更换。
+
+### 阿里云 OSS
+
+头像和商品图走 [服务端签名直传并设置上传回调](https://help.aliyun.com/zh/oss/user-guide/python-1)：后端 `AssumeRole` 后签发 PostPolicy（OSS4-HMAC-SHA256），浏览器 `FormData` POST 到 Bucket 域名，OSS 再回调 `POST /api/oss/callback`。
+
+控制台需要提前准备：
+
+- RAM 用户只有 `AliyunSTSAssumeRoleAccess`；RAM 角色只有对本 Bucket 的 `oss:PutObject`
+- Bucket CORS：允许前端 Origin（或 `*`），Methods 含 **POST、PUT、GET**，Headers `*`
+- 对象可公网读（公共读或 GetObject 策略），商品列表和头像才能直接展示
+- **`ALIYUN_OSS_CALLBACK_URL` 必须公网可达**。本地没有公网地址时，PostObject 会因回调失败而整次上传失败，需要内网穿透；此时仍可用 `PATCH /api/users/me` 写入已上传的 `avatarUrl`
+
+签发接口 `POST /api/uploads/sign` 需要登录。`scene=avatar` 任意用户；`scene=product` 仅管理员。对象键由服务端生成，前端必须使用返回的 `key`，不要用「目录 + 原文件名」。
 
 ## 目录
 
 ```text
 src/main/java/com/czlr/orangemarketbackend/
-├── controller/     Auth / Product / Cart / Order / User / Review / Service / Admin
-├── service/        业务与短信
+├── controller/     Auth / Product / Cart / Order / User / Review / Service / Admin / Upload
+├── service/        业务、短信与 OSS
+│   └── oss/        PostPolicy 签发、回调验签
 ├── mapper/         MyBatis-Plus
 ├── entity/po|dto   表实体与请求响应
 ├── config/         Shiro、Redis、RabbitMQ、WebSocket、Kaptcha

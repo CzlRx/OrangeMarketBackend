@@ -1,8 +1,10 @@
 package com.czlr.orangemarketbackend.controller;
 
 import com.czlr.orangemarketbackend.common.Result;
+import com.czlr.orangemarketbackend.entity.dto.AdminProductImagesRequest;
 import com.czlr.orangemarketbackend.entity.dto.AdminShipmentDTO;
 import com.czlr.orangemarketbackend.entity.dto.AdminUserStatusDTO;
+import com.czlr.orangemarketbackend.entity.dto.ProductDTO;
 import com.czlr.orangemarketbackend.entity.dto.ShipOrderRequest;
 import com.czlr.orangemarketbackend.service.AdminService;
 import org.apache.shiro.authz.annotation.Logical;
@@ -35,5 +37,12 @@ public class AdminController {
     @PutMapping("/users/{userId}/ban")
     public Result<AdminUserStatusDTO> banUser(@PathVariable Long userId) {
         return Result.success(adminService.banUser(userId));
+    }
+
+    @PutMapping("/products/{productId}/images")
+    public Result<ProductDTO> updateProductImages(
+            @PathVariable Long productId,
+            @RequestBody AdminProductImagesRequest request) {
+        return Result.success(adminService.updateProductImages(productId, request));
     }
 }

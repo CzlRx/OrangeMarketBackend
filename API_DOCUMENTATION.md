@@ -708,11 +708,12 @@ PATCH /api/users/me
 {
   "nickname": "橙子同学",
   "gender": 0,
-  "birthday": "1998-08-18"
+  "birthday": "1998-08-18",
+  "avatarUrl": "https://cdn.example.com/avatars/10001/abc.png"
 }
 ```
 
-当前版本允许修改昵称、性别和生日。头像上传暂不实现，`avatarUrl` 可以由系统预置或后续补充。
+当前版本允许修改昵称、性别、生日和头像。`avatarUrl` 必须属于本项目 OSS（或 CDN）且路径为 `avatars/{当前用户ID}/`。推荐流程：先调用 `POST /api/uploads/sign`，前端 PostObject 直传，OSS 回调成功后资料会自动更新；本地没有公网回调时，也可在直传成功后把返回的 `accessUrl` 通过本接口写入。
 
 ### 7.3 获取地址列表
 
@@ -1244,10 +1245,10 @@ POST /api/orders/{orderId}/reviews
 ## 11. 接口权限总览
 
 - 游客：图形验证码、短信发送、登录、分类、商品列表、商品详情、商品评价列表
-- 登录用户：当前用户、购物车、地址、收藏、浏览足迹、搜索历史、结算、订单、模拟支付、确认收货和提交评价
-- 管理员：发货和封禁用户
+- 登录用户：当前用户、购物车、地址、收藏、浏览足迹、搜索历史、结算、订单、模拟支付、确认收货、提交评价、OSS 签名直传（头像）
+- 管理员：发货、封禁用户、更新商品图片、签发商品图上传
 - 游客购物车、搜索历史：由前端本地保存
-- 商品、分类数据：当前通过 SQL 或数据库工具维护，不提供商品和分类后台管理接口
+- 商品、分类数据：分类与商品主数据仍通过 SQL 维护；商品图片可通过管理端接口更新
 
 ## 12. 管理端接口
 
@@ -1306,9 +1307,113 @@ Authorization: Bearer <admin-token>
 
 非管理员访问管理端接口返回 `40300`。
 
-## 13. 数据一致性和实现顺序
+### 12.3 更新商品图片
 
-### 13.1 库存扣减
+```http
+PUT /api/admin/products/{productId}/images
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "coverImage": "https://cdn.example.com/products/20260919/cover.png",
+  "images": [
+    "https://cdn.example.com/products/20260919/cover.png",
+    "https://cdn.example.com/products/20260919/detail.png"
+  ]
+}
+```
+
+管理员先通过 `POST /api/uploads/sign`（`scene=product`）拿到 PostPolicy，再 PostObject 直传到 OSS。本接口把已上传的 URL 写入 `cover_image` 和 `images_json`。`images` 与 `coverImage` 至少提供一项；每个 URL 必须属于本存储空间且路径前缀为 `products/`。未传 `coverImage` 时使用 `images[0]`。最多 20 张。商品不存在返回 `40400`。
+
+## 13. 对象存储上传
+
+对齐阿里云「服务端签名直传并设置上传回调」：STS 临时凭证 + PostPolicy（OSS4-HMAC-SHA256）+ 浏览器 PostObject + 服务端回调。
+
+### 14.1 签发 PostPolicy
+
+```http
+POST /api/uploads/sign
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "scene": "avatar",
+  "filename": "avatar.png",
+  "contentType": "image/png"
+}
+```
+
+`scene` 取值：`avatar`（任意登录用户，对象键前缀 `avatars/{userId}/`）、`product`（仅管理员，前缀 `products/{yyyyMMdd}/`）。仅允许 `image/jpeg`、`image/png`、`image/webp`、`image/gif`。头像不超过 2MB，商品图不超过 5MB（由 Policy 的 `content-length-range` 限制）。对象键由服务端生成，客户端不能指定。
+
+成功响应 `data`：
+
+```json
+{
+  "dir": "avatars/10001/",
+  "key": "avatars/10001/ab12cd.png",
+  "host": "https://bucket.oss-cn-hangzhou.aliyuncs.com",
+  "accessUrl": "https://cdn.example.com/avatars/10001/ab12cd.png",
+  "policy": "eyJl****",
+  "security_token": "CAIS****",
+  "signature": "9103****",
+  "x_oss_credential": "STS.xxx/20241127/cn-hangzhou/oss/aliyun_v4_request",
+  "x_oss_date": "20241127T060941Z",
+  "x_oss_signature_version": "OSS4-HMAC-SHA256",
+  "callback": "eyJjYWxs****"
+}
+```
+
+前端用 `FormData` POST 到 `host`（`file` 必须是最后一个表单域），字段如下：
+
+| 表单域 | 值 |
+|--------|----|
+| `success_action_status` | `200` |
+| `policy` | 响应 `policy` |
+| `x-oss-signature` | 响应 `signature` |
+| `x-oss-signature-version` | `OSS4-HMAC-SHA256` |
+| `x-oss-credential` | 响应 `x_oss_credential` |
+| `x-oss-date` | 响应 `x_oss_date` |
+| `key` | 响应 `key`（不要用 `dir + 原文件名`） |
+| `x-oss-security-token` | 响应 `security_token` |
+| `callback` | 响应 `callback` |
+| `Content-Type` | 与签发时的 `contentType` 一致 |
+| `x:scene` | `avatar` 或 `product` |
+| `x:userId` | 当前用户 ID 字符串 |
+| `file` | 文件本体，必须放最后 |
+
+Bucket 需配置 CORS（Methods 含 POST）。回调 URL 必须公网可达，否则 OSS 会判定上传失败。
+
+### 14.2 上传回调
+
+```http
+POST /api/oss/callback
+```
+
+由 OSS 服务器调用，不携带用户 JWT。服务端校验 `authorization` 与 `x-oss-pub-key-url` 的 RSA 签名；公钥 URL 必须属于 `gosspublic.alicdn.com`。验签失败返回 HTTP 400，OSS 会判定本次上传失败。
+
+回调 body（`application/x-www-form-urlencoded`）包含 `bucket`、`object`、`size`、`mimeType`、`scene`、`userId`。`scene=avatar` 时写入对应用户的 `avatarUrl`；`scene=product` 只返回 `accessUrl`，需再调用 12.3 写入商品。
+
+成功时 HTTP 200，`Content-Type: application/json`，OSS 会把该 JSON 转发给浏览器。`data` 示例：
+
+```json
+{
+  "object": "avatars/10001/ab12cd.png",
+  "accessUrl": "https://cdn.example.com/avatars/10001/ab12cd.png",
+  "scene": "avatar"
+}
+```
+
+## 14. 数据一致性和实现顺序
+
+### 14.1 库存扣减
 
 库存直接使用 `product.stock`，不创建独立库存表。创建订单时建议使用带条件的更新：
 
@@ -1323,18 +1428,18 @@ WHERE id = #{productId}
 
 受影响行数为 `0` 时返回库存不足，并回滚订单事务。
 
-### 13.2 订单地址
+### 14.2 订单地址
 
 创建订单时将 `user_address` 的完整内容复制到 `orders` 的收货字段。之后用户修改或删除地址，不影响已经创建的订单。
 
-### 13.3 金额计算
+### 14.3 金额计算
 
 - 商品小计：订单明细 `unitPrice * quantity` 之和
 - 运费：按照商品当前固定运费规则计算
 - 订单总额：商品小计加运费
 - 所有金额由服务端计算，客户端金额只用于展示
 
-### 13.4 推荐实现顺序
+### 14.4 推荐实现顺序
 
 1. 统一响应、异常处理和 Token 鉴权
 2. 分类和商品列表、详情、评价查询
@@ -1344,8 +1449,9 @@ WHERE id = #{productId}
 6. 结算预览、订单创建和库存扣减
 7. 模拟支付、超时取消和确认收货
 8. 提交评价和订单完成
+9. OSS 签名直传与头像/商品图落库
 
-## 14. 本地初始化
+## 15. 本地初始化
 
 创建新数据库和表：
 

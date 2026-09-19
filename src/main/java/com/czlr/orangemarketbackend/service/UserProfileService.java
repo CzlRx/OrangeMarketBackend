@@ -29,9 +29,11 @@ import com.czlr.orangemarketbackend.mapper.UserAddressMapper;
 import com.czlr.orangemarketbackend.mapper.UserBrowseHistoryMapper;
 import com.czlr.orangemarketbackend.mapper.UserFavoriteMapper;
 import com.czlr.orangemarketbackend.mapper.UserSearchHistoryMapper;
+import com.czlr.orangemarketbackend.common.enums.OssUploadScene;
+import com.czlr.orangemarketbackend.config.AliyunOssProperties;
 import com.czlr.orangemarketbackend.mapper.ProductMapper;
+import com.czlr.orangemarketbackend.service.oss.OssOwnedUrlValidator;
 import com.czlr.orangemarketbackend.utils.AuthRedisKey;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +43,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -59,6 +62,8 @@ public class UserProfileService {
     private final ProductMapper productMapper;
     private final ProductService productService;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final OssOwnedUrlValidator ossOwnedUrlValidator;
+    private final AliyunOssProperties aliyunOssProperties;
 
     public UserProfileService(
             UserAddressMapper userAddressMapper,
@@ -68,7 +73,9 @@ public class UserProfileService {
             UserSearchHistoryMapper userSearchHistoryMapper,
             ProductMapper productMapper,
             ProductService productService,
-            RedisTemplate<String, Object> redisTemplate) {
+            RedisTemplate<String, Object> redisTemplate,
+            OssOwnedUrlValidator ossOwnedUrlValidator,
+            AliyunOssProperties aliyunOssProperties) {
         this.userAccountMapper = userAccountMapper;
         this.userAddressMapper = userAddressMapper;
         this.userFavoriteMapper = userFavoriteMapper;
@@ -77,6 +84,8 @@ public class UserProfileService {
         this.productMapper = productMapper;
         this.productService = productService;
         this.redisTemplate = redisTemplate;
+        this.ossOwnedUrlValidator = ossOwnedUrlValidator;
+        this.aliyunOssProperties = aliyunOssProperties;
     }
 
     public UserProfileDTO getProfile(Long userId) {
@@ -88,8 +97,9 @@ public class UserProfileService {
         if (request == null
                 || (request.getNickname() == null
                 && request.getGender() == null
-                && request.getBirthday() == null)) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "至少提供 nickname、gender 或 birthday 字段");
+                && request.getBirthday() == null
+                && request.getAvatarUrl() == null)) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "至少提供 nickname、gender、birthday 或 avatarUrl 字段");
         }
 
         UserAccount user = getUser(userId);
@@ -105,10 +115,20 @@ public class UserProfileService {
         if (request.getBirthday() != null) {
             user.setBirthday(request.getBirthday());
         }
+        if (request.getAvatarUrl() != null) {
+            user.setAvatarUrl(requireOwnedAvatarUrl(userId, request.getAvatarUrl()));
+        }
 
         userAccountMapper.updateById(user);
         syncSession(user, sessionId);
         return toUserProfile(user);
+    }
+
+    public void updateAvatarFromObjectKey(Long userId, String objectKey) {
+        UserAccount user = getUser(userId);
+        user.setAvatarUrl(aliyunOssProperties.toAccessUrl(objectKey));
+        userAccountMapper.updateById(user);
+        syncAvatarToSessions(userId, user.getAvatarUrl());
     }
 
     public List<AddressDTO> getAddresses(Long userId) {
@@ -387,8 +407,38 @@ public class UserProfileService {
             } else {
                 redisTemplate.opsForHash().put(redisKey, "birthday", user.getBirthday().toString());
             }
+            if (user.getAvatarUrl() == null || user.getAvatarUrl().isBlank()) {
+                redisTemplate.opsForHash().delete(redisKey, "avatarUrl");
+            } else {
+                redisTemplate.opsForHash().put(redisKey, "avatarUrl", user.getAvatarUrl());
+            }
         } catch (RuntimeException ignored) {
         }
+    }
+
+    private void syncAvatarToSessions(Long userId, String avatarUrl) {
+        try {
+            Set<String> keys = redisTemplate.keys(AuthRedisKey.loginPattern(userId));
+            if (keys == null || keys.isEmpty()) {
+                return;
+            }
+            for (String key : keys) {
+                Object sessionUserId = redisTemplate.opsForHash().get(key, "id");
+                if (sessionUserId != null && userId.toString().equals(sessionUserId.toString())) {
+                    if (avatarUrl == null || avatarUrl.isBlank()) {
+                        redisTemplate.opsForHash().delete(key, "avatarUrl");
+                    } else {
+                        redisTemplate.opsForHash().put(key, "avatarUrl", avatarUrl);
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private String requireOwnedAvatarUrl(Long userId, String avatarUrl) {
+        return ossOwnedUrlValidator.requireOwnedUrl(
+                avatarUrl, OssUploadScene.AVATAR.getObjectPrefix() + userId + "/");
     }
 
     private AddressDTO toAddressDTO(UserAddress address) {
