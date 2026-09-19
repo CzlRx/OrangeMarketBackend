@@ -57,5 +57,5 @@ aliyun:
     region: ${ALIYUN_OSS_REGION:cn-hangzhou}
     host: ${ALIYUN_OSS_HOST:}
     public-base-url: ${ALIYUN_OSS_PUBLIC_BASE_URL:}
-    callback-url: ${ALIYUN_OSS_CALLBACK_URL:}
+    callback-url: ${ALIYUN_OSS_CALLBACK_URL:}  # 本地留空；直传成功后由前端 PATCH/PUT 入库
     expire-seconds: ${ALIYUN_OSS_EXPIRE_SECONDS:3600}

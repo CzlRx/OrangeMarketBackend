@@ -54,13 +54,14 @@ public class OssPostPolicyService {
         String key = OssObjectKeyFactory.buildKey(dir, contentType, UUID.randomUUID());
         OssStsCredentials credentials = stsCredentialProvider.assumeRole(
                 "orange-market-" + userId, properties.getExpireSeconds());
+        String callbackUrl = properties.hasUsableCallbackUrl() ? properties.getCallbackUrl() : "";
         return OssPostPolicySigner.sign(new OssPostPolicySigner.OssPostPolicyCommand(
                 credentials,
                 properties.getBucket().trim(),
                 properties.getRegion(),
                 properties.getHost(),
                 properties.toAccessUrl(key),
-                properties.getCallbackUrl(),
+                callbackUrl,
                 dir,
                 key,
                 contentType,
@@ -74,9 +75,6 @@ public class OssPostPolicyService {
     private void requireConfigured() {
         if (!properties.isConfigured()) {
             throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "对象存储未配置");
-        }
-        if (properties.getCallbackUrl().isEmpty()) {
-            throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "对象存储回调地址未配置");
         }
         if (properties.getHost().isEmpty()) {
             throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "对象存储未配置");

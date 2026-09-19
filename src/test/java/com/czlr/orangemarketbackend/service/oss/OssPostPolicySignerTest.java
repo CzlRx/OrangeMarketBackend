@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OssPostPolicySignerTest {
@@ -62,6 +63,28 @@ class OssPostPolicySignerTest {
                 new TypeReference<>() { });
         assertEquals("https://api.example.com/api/oss/callback", callback.get("callbackUrl"));
         assertTrue(String.valueOf(callback.get("callbackBody")).contains("${x:scene}"));
+    }
+
+    @Test
+    void blankCallbackUrlOmitsCallbackPayload() {
+        OssStsCredentials credentials = new OssStsCredentials("STS.ak", "secret", "token-1");
+        Instant now = Instant.parse("2026-09-19T08:00:00Z");
+        OssSignDTO dto = OssPostPolicySigner.sign(new OssPostPolicySigner.OssPostPolicyCommand(
+                credentials,
+                "orange-market",
+                "cn-hangzhou",
+                "https://orange-market.oss-cn-hangzhou.aliyuncs.com",
+                "https://cdn.example.com/avatars/10001/abc.png",
+                "",
+                "avatars/10001/",
+                "avatars/10001/abc.png",
+                "image/png",
+                "avatar",
+                "10001",
+                3600,
+                2 * 1024 * 1024,
+                now));
+        assertNull(dto.getCallback());
     }
 
     @Test

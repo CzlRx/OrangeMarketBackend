@@ -44,12 +44,7 @@ public final class OssPostPolicySigner {
         String xOssCredential = command.credentials().accessKeyId()
                 + "/" + date + "/" + command.region() + "/oss/aliyun_v4_request";
 
-        Map<String, Object> callback = new LinkedHashMap<>();
-        callback.put("callbackUrl", command.callbackUrl());
-        callback.put("callbackBody", CALLBACK_BODY);
-        callback.put("callbackBodyType", CALLBACK_BODY_TYPE);
-        String callbackBase64 = Base64.getEncoder()
-                .encodeToString(OBJECT_MAPPER.writeValueAsString(callback).getBytes(StandardCharsets.UTF_8));
+        String callbackBase64 = encodeCallback(command.callbackUrl());
 
         Map<String, Object> policy = new LinkedHashMap<>();
         policy.put("expiration", expiration);
@@ -88,6 +83,18 @@ public final class OssPostPolicySigner {
         dto.setXOssSignatureVersion(SIGNATURE_VERSION);
         dto.setCallback(callbackBase64);
         return dto;
+    }
+
+    private static String encodeCallback(String callbackUrl) {
+        if (callbackUrl == null || callbackUrl.isBlank()) {
+            return null;
+        }
+        Map<String, Object> callback = new LinkedHashMap<>();
+        callback.put("callbackUrl", callbackUrl);
+        callback.put("callbackBody", CALLBACK_BODY);
+        callback.put("callbackBodyType", CALLBACK_BODY_TYPE);
+        return Base64.getEncoder()
+                .encodeToString(OBJECT_MAPPER.writeValueAsString(callback).getBytes(StandardCharsets.UTF_8));
     }
 
     public record OssPostPolicyCommand(

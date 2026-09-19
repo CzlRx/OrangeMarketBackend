@@ -231,7 +231,7 @@ JWT 密钥与过期时间在 `application.yaml` 的 `jwt.*`。仓库里的默认
 - RAM 用户只有 `AliyunSTSAssumeRoleAccess`；RAM 角色只有对本 Bucket 的 `oss:PutObject`
 - Bucket CORS：允许前端 Origin（或 `*`），Methods 含 **POST、PUT、GET**，Headers `*`
 - 对象可公网读（公共读或 GetObject 策略），商品列表和头像才能直接展示
-- **`ALIYUN_OSS_CALLBACK_URL` 必须公网可达**。本地没有公网地址时，PostObject 会因回调失败而整次上传失败，需要内网穿透；此时仍可用 `PATCH /api/users/me` 写入已上传的 `avatarUrl`
+- **`ALIYUN_OSS_CALLBACK_URL` 仅生产环境需要公网地址**。本地开发请留空（或不要填 `localhost`）：签发时不会带 OSS 回调，浏览器直传成功后由前端调用 `PATCH /api/users/me`（头像）或 `PUT /api/admin/products/{id}/images`（商品图）入库。上线后再配 `https://{公网API}/api/oss/callback`。
 
 签发接口 `POST /api/uploads/sign` 需要登录。`scene=avatar` 任意用户；`scene=product` 仅管理员。对象键由服务端生成，前端必须使用返回的 `key`，不要用「目录 + 原文件名」。
 

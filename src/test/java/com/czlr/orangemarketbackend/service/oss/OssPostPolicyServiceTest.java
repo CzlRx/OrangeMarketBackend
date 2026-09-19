@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -63,6 +64,14 @@ class OssPostPolicyServiceTest {
         assertTrue(dto.getAccessUrl().startsWith("https://cdn.example.com/avatars/10001/"));
         verify(stsCredentialProvider).assumeRole("orange-market-10001", 3600L);
         verify(userAccountMapper, never()).selectById(10001L);
+    }
+
+    @Test
+    void localCallbackUrlIsOmittedFromSign() {
+        ReflectionTestUtils.setField(properties, "callbackUrl", "http://localhost:8080/api/oss/callback");
+        var dto = service.sign(10001L, new OssSignRequest("avatar", "a.png", "image/png"));
+        assertNull(dto.getCallback());
+        assertTrue(dto.getAccessUrl().startsWith("https://cdn.example.com/avatars/10001/"));
     }
 
     @Test

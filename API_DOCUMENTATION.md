@@ -1389,7 +1389,7 @@ Content-Type: application/json
 | `x:userId` | 当前用户 ID 字符串 |
 | `file` | 文件本体，必须放最后 |
 
-Bucket 需配置 CORS（Methods 含 POST）。回调 URL 必须公网可达，否则 OSS 会判定上传失败。
+Bucket 需配置 CORS（Methods 含 POST）。`ALIYUN_OSS_CALLBACK_URL` 仅在公网可达时才写入签发结果；本地开发请留空，直传成功后用返回的 `accessUrl` 调用 `PATCH /api/users/me` 或 `PUT /api/admin/products/{id}/images` 入库。若填了 `localhost` 回调地址，服务端会自动忽略，避免 OSS 判定上传失败。
 
 ### 14.2 上传回调
 

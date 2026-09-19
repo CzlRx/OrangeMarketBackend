@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS service_session (
     PRIMARY KEY (id),
     KEY idx_service_session_lobby (status, agent_id, created_at),
     KEY idx_service_session_user (user_id, status),
-    KEY idx_service_session_agent (agent_id, status)
+    KEY idx_service_session_agent (agent_id, status),
+    -- closed 行表达式为 NULL，UNIQUE 允许重复；同一用户同时只能有一条 active
+    UNIQUE KEY uk_service_session_user_active ((CASE WHEN status = 'active' THEN user_id END))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='客服业务会话';
 
 CREATE TABLE IF NOT EXISTS service_message (
