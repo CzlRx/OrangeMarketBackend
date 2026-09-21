@@ -8,7 +8,7 @@ import lombok.RequiredArgsConstructor;
 /**
  * 支付交易状态
  *
- * <p>对应 payment_transaction.status。当前为模拟支付，暂不接入真实支付渠道。
+ * <p>对应 payment_transaction.status。
  */
 @Getter
 @RequiredArgsConstructor

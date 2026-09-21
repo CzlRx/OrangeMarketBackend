@@ -130,6 +130,9 @@ public class ShiroConfig {
         // 本地回退上传的图片由 <img> 直接请求，不能要求 JWT
         filterChainDefinitionMap.put("/api/uploads/files/**", "anon");
 
+        // 支付宝异步通知由支付宝服务器发起，不能走 JWT
+        filterChainDefinitionMap.put("/api/payments/alipay/notify", "anon");
+
         // WebSocket：必须 anon。JWT 在 ServiceWebSocketAuthInterceptor 校验
         filterChainDefinitionMap.put("/ws/service", "anon");
         filterChainDefinitionMap.put("/ws/**", "anon");

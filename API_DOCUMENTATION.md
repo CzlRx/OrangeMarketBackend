@@ -9,7 +9,7 @@
 - 游客本地购物车，登录后使用服务端购物车
 - 收货地址管理
 - 收藏、浏览足迹和搜索历史
-- 创建订单、模拟支付、确认收货
+- 创建订单、支付、确认收货
 - 商品评价
 
 当前数据库共 11 张表：
@@ -1067,11 +1067,11 @@ POST /api/orders/{orderId}/receive
 
 只允许操作 `pending_receipt` 订单。成功后状态改为 `pending_review`，写入 `received_at`。
 
-## 9. 模拟支付接口
+## 9. 支付接口
 
-新数据库没有支付流水表，支付信息直接保存到 `orders.payment_method` 和 `orders.paid_at`。
+支付流水写入 `payment_transaction`。确认付款以支付宝异步通知为准；本地无公网回调时可用查单接口兜底。
 
-### 9.1 模拟支付订单
+### 9.1 发起支付
 
 ```http
 POST /api/orders/{orderId}/pay
@@ -1083,38 +1083,57 @@ POST /api/orders/{orderId}/pay
 
 ```json
 {
-  "paymentMethod": "mock"
+  "paymentMethod": "alipay"
 }
 ```
 
-开发阶段只模拟支付成功，不接入微信或支付宝。成功后在事务中：
+`paymentMethod` 允许：
 
-- 校验订单属于当前用户
-- 校验订单状态为 `pending_payment`
-- 写入 `payment_method`
-- 写入 `paid_at`
-- 将订单状态更新为 `pending_shipment`
+- `alipay`：当面付预下单（`alipay.trade.precreate`），密钥模式 RSA2 加签，`biz_content` 使用开放平台 AES 密钥加密。订单仍为 `pending_payment`，响应带 `qrCode`，前端自行展示二维码。
+- `mock`：仅当 `alipay.allow-mock=true` 时可用，同步把订单改为 `pending_shipment`。
 
-响应：
+其它值返回 `40000`。仅 `pending_payment` 且未超过 `paymentExpireAt` 可支付。同一订单若已有未过期的 pending 支付宝流水，直接返回已有 `qrCode`，不重复预下单。
+
+支付宝预下单响应 `data`：
 
 ```json
 {
-  "code": 0,
-  "message": "支付成功",
-  "data": {
-    "orderId": "60001",
-    "orderNo": "OM202609050001",
-    "status": "pending_shipment",
-    "paymentMethod": "mock",
-    "paidAt": "2026-09-05T12:35:00.000Z"
-  },
-  "timestamp": 1788602100000
+  "orderId": "60001",
+  "orderNo": "OM202609050001",
+  "status": "pending_payment",
+  "paymentMethod": "alipay",
+  "paidAt": null,
+  "qrCode": "https://qr.alipay.com/baxxxx",
+  "outTradeNo": "P60001T1758440000ABCD1234",
+  "expireAt": "2026-09-05T13:00:00.000Z"
 }
 ```
 
-订单详情中的支付状态由 `status`、`paymentMethod` 和 `paidAt` 组合表示，不提供支付记录列表接口。
+mock 成功时 `status` 为 `pending_shipment`，写入 `paidAt`，`qrCode` 为空。
 
-### 9.2 基于消息队列的支付超时取消
+### 9.2 主动查单
+
+```http
+POST /api/orders/{orderId}/payment/sync
+```
+
+是否需要登录：是。无请求体。
+
+调用加密的 `alipay.trade.query`。若支付宝为 `TRADE_SUCCESS` / `TRADE_FINISHED`，与异步通知同一套落库（幂等）。用于本地没有公网 `notify_url`、或回调延迟时确认付款。
+
+### 9.3 支付宝异步通知
+
+```http
+POST /api/payments/alipay/notify
+```
+
+是否需要登录：否。支付宝服务器 POST 表单。验签使用支付宝公钥 RSA2。校验 `app_id`、`out_trade_no`、`total_amount`。仅 `TRADE_SUCCESS` / `TRADE_FINISHED` 记成功。
+
+**响应必须是纯文本 `success` 或 `fail`**，不能包 JSON。金额不一致时不改订单，仍返回 `success` 避免无限重试。
+
+支付成功后：流水 `success`，回填 `trade_no`（支付宝交易号，预下单时为空），订单 `pending_payment` → `pending_shipment`。
+
+### 9.4 基于消息队列的支付超时取消
 
 支付超时取消通过 RabbitMQ 的 TTL 队列和死信交换机实现，不使用定时任务轮询订单表。
 
@@ -1155,14 +1174,14 @@ RabbitMQ 资源说明：
 - `order.cancel.exchange`：死信交换机，负责将过期消息路由到取消队列。
 - `order.cancel.queue`：持久化取消队列，由订单超时消费者监听。
 
-消费者监听 `order.cancel.queue`，收到订单 ID 后执行事务：
+消费者监听 `order.cancel.queue`，收到订单 ID 后：
 
-1. 查询订单并判断状态是否仍为 `pending_payment`。
-2. 使用带状态条件的更新，将订单改为 `cancelled`，写入 `cancelled_at` 和取消原因。
-3. 根据 `order_item` 恢复商品库存。
-4. 事务成功后确认消息；处理失败时不应确认消息，由消息容器按照重试和拒绝策略处理。
+1. 若订单仍为 `pending_payment` 且存在 pending 支付宝流水，先加密查单。
+2. 支付宝已支付则落库为待发货，**不取消**。
+3. 未支付则加密关单；关单发现已支付同样落库，不取消。
+4. 仍未支付时将流水改为 `cancelled`，再把订单改为 `cancelled` 并恢复库存。
 
-如果订单已经支付、已经手动取消或消息重复投递，消费者直接结束处理，不重复取消订单或恢复库存。前端倒计时只用于展示，不能作为实际取消依据。
+如果订单已经支付、已经手动取消或消息重复投递，消费者直接结束处理。前端倒计时只用于展示，不能作为实际取消依据。用户主动取消待付款订单时同样会先查单/关单。
 
 ## 10. 评价接口
 
@@ -1245,7 +1264,7 @@ POST /api/orders/{orderId}/reviews
 ## 11. 接口权限总览
 
 - 游客：图形验证码、短信发送、登录、分类、商品列表、商品详情、商品评价列表
-- 登录用户：当前用户、购物车、地址、收藏、浏览足迹、搜索历史、结算、订单、模拟支付、确认收货、提交评价、OSS 签名直传（头像）
+- 登录用户：当前用户、购物车、地址、收藏、浏览足迹、搜索历史、结算、订单、支付、确认收货、提交评价、OSS 签名直传（头像）
 - 管理员：发货、封禁用户、更新商品图片、签发商品图上传
 - 游客购物车、搜索历史：由前端本地保存
 - 商品、分类数据：分类与商品主数据仍通过 SQL 维护；商品图片可通过管理端接口更新
@@ -1447,7 +1466,7 @@ WHERE id = #{productId}
 4. 购物车及游客购物车合并
 5. 收藏、浏览足迹和搜索历史
 6. 结算预览、订单创建和库存扣减
-7. 模拟支付、超时取消和确认收货
+7. 支付、超时取消和确认收货
 8. 提交评价和订单完成
 9. OSS 签名直传与头像/商品图落库
 

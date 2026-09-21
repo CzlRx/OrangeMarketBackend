@@ -339,7 +339,7 @@ export interface Order {
   shippingFee: number
   total: number
   buyerRemark?: string
-  paymentMethod?: string                    // "mock"
+  paymentMethod?: string                    // "alipay" | "mock"
   trackingNo?: string
   createdAt: string
   paymentExpireAt?: string
@@ -358,7 +358,16 @@ export interface OrderPreview {
   paymentExpireMinutes: number              // 恒为 30
 }
 export interface OrderCreateResult { orderId: string; orderNo: string; status: OrderStatus; total: number; paymentExpireAt: string }
-export interface PayOrderResult { orderId: string; orderNo: string; status: OrderStatus; paymentMethod: string; paidAt: string }
+export interface PayOrderResult {
+  orderId: string
+  orderNo: string
+  status: OrderStatus
+  paymentMethod: string
+  paidAt?: string
+  qrCode?: string
+  outTradeNo?: string
+  expireAt?: string
+}
 
 // ===== 收藏 / 足迹 / 搜索历史 =====
 export interface FavoriteItem { id: string; productId: string; createdAt: string; product?: Product }
@@ -388,7 +397,7 @@ export interface CartMergeRequest { items: CartMergeItemRequest[] }
 export interface CartOrderPreviewRequest { cartItemIds: string[]; addressId: string }
 export interface CartOrderCreateRequest { cartItemIds: string[]; addressId: string; buyerRemark?: string }
 export interface DirectOrderCreateRequest { productId: string; quantity: number; addressId: string; buyerRemark?: string }
-export interface PayOrderRequest { paymentMethod: 'mock' }
+export interface PayOrderRequest { paymentMethod: 'mock' | 'alipay' }
 export interface CancelOrderRequest { reason?: string }
 export interface FavoriteRequest { productId: string }
 export interface BrowseHistoryRequest { productId: string }
@@ -796,26 +805,41 @@ Query 参数：
 
 响应 `data`：单个 `Order`（同 E4 元素）。
 
-#### E6. 支付订单（模拟支付）`POST /api/orders/{orderId}/pay`
+#### E6. 支付订单 `POST /api/orders/{orderId}/pay`
 
 请求体（`PayOrderRequest`）：
 
 ```json
-{ "paymentMethod": "mock" }
+{ "paymentMethod": "alipay" }
 ```
 
 规则：
 
-- `paymentMethod` 必须有值且**只能是 `mock`**，否则 `40000 当前仅支持 mock 支付`。
+- `paymentMethod` 必须为 `alipay` 或 `mock`（`mock` 仅当服务端 `ALIPAY_ALLOW_MOCK=true`）。
 - 仅 `pending_payment` 可支付，否则 `42200 仅待付款订单可以支付`。
 - 超过 `paymentExpireAt` → `42200 订单支付已超时`。
-- 支付成功：状态 → `pending_shipment`，写入 `paymentMethod`/`paidAt`。
+- `alipay`：调用当面付预下单，订单仍为 `pending_payment`，返回 `qrCode`（二维码码串，前端自行绘制）和 `outTradeNo`。**不要**把此次响应当成已付款。
+- 支付完成后订单变为 `pending_shipment`（异步通知或 `POST /api/orders/{orderId}/payment/sync`）。前端应轮询 `GET /api/orders/{orderId}`，或提供「我已支付」调用 sync。
+- `mock`：同步成功，状态 → `pending_shipment`，写入 `paidAt`。
 
-响应 `data`（`PayOrderResult`）：
+支付宝预下单响应 `data`（`PayOrderResult`）：
 
 ```json
-{ "orderId": "60001", "orderNo": "OM2026090812000012345", "status": "pending_shipment", "paymentMethod": "mock", "paidAt": "2026-09-08T12:05:00" }
+{
+  "orderId": "60001",
+  "orderNo": "OM2026090812000012345",
+  "status": "pending_payment",
+  "paymentMethod": "alipay",
+  "paidAt": null,
+  "qrCode": "https://qr.alipay.com/baxxxx",
+  "outTradeNo": "P60001T1758440000ABCD1234",
+  "expireAt": "2026-09-08T12:30:00"
+}
 ```
+
+#### E6b. 主动查单 `POST /api/orders/{orderId}/payment/sync`
+
+无请求体，需登录。向支付宝查单，已支付则与异步通知同一套落库。用于回调未到达时确认付款。返回同 `PayOrderResult`。
 
 #### E7. 取消订单 `POST /api/orders/{orderId}/cancel`
 
@@ -1102,7 +1126,7 @@ Query：`page`(默认 1)、`pageSize`(默认 10，最大 50)。按搜索时间�
 ### 8.1 状态流转（后端强制校验）
 
 ```
-创建订单 → pending_payment ──支付(mock)──→ pending_shipment ──管理员发货──→ pending_receipt
+创建订单 → pending_payment ──支付(alipay/mock)──→ pending_shipment ──管理员发货──→ pending_receipt
                               │                                            │
                               │ 用户取消 / 30分钟超时自动取消             用户确认收货
                               ↓                                            ↓
@@ -1135,9 +1159,10 @@ Query：`page`(默认 1)、`pageSize`(默认 10，最大 50)。按搜索时间�
 
 ### 8.4 支付与超时
 
-- 支付方式：仅 `mock`。
+- 支付方式：`alipay`（当面付扫码）或本地 `mock`。
 - 订单创建后 **30 分钟**内必须支付（`paymentExpireAt` / `paymentExpireMinutes=30`）。
-- 超时由后端 RabbitMQ 延迟任务自动取消（状态 → `cancelled`，恢复库存）。
+- `alipay` 预下单后请展示 `qrCode`；付款结果以后端订单状态为准（异步通知或 `payment/sync`）。
+- 超时由后端 RabbitMQ 延迟任务自动取消（先向支付宝查单/关单；已支付则落库不取消）。
 - 前端收到 422「订单支付已超时 / 订单状态已发生变化」时刷新订单列表。
 
 ---

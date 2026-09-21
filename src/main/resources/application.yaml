@@ -63,3 +63,12 @@ aliyun:
     public-base-url: ${ALIYUN_OSS_PUBLIC_BASE_URL:}
     callback-url: ${ALIYUN_OSS_CALLBACK_URL:}  # 本地留空；直传成功后由前端 PATCH/PUT 入库
     expire-seconds: ${ALIYUN_OSS_EXPIRE_SECONDS:3600}
+
+alipay:
+  gateway: ${ALIPAY_GATEWAY:https://openapi.alipay.com/gateway.do}
+  app-id: ${ALIPAY_APP_ID:}
+  merchant-private-key: ${ALIPAY_MERCHANT_PRIVATE_KEY:}
+  alipay-public-key: ${ALIPAY_PUBLIC_KEY:}
+  encrypt-key: ${ALIPAY_ENCRYPT_KEY:}
+  notify-url: ${ALIPAY_NOTIFY_URL:}
+  allow-mock: ${ALIPAY_ALLOW_MOCK:true}

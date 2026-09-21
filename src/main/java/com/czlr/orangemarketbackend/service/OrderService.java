@@ -20,8 +20,6 @@ import com.czlr.orangemarketbackend.entity.dto.OrderDTO;
 import com.czlr.orangemarketbackend.entity.dto.OrderItemDTO;
 import com.czlr.orangemarketbackend.entity.dto.OrderPageDTO;
 import com.czlr.orangemarketbackend.entity.dto.OrderPreviewDTO;
-import com.czlr.orangemarketbackend.entity.dto.PayOrderRequest;
-import com.czlr.orangemarketbackend.entity.dto.PayOrderResultDTO;
 import com.czlr.orangemarketbackend.entity.po.CartItem;
 import com.czlr.orangemarketbackend.entity.po.Order;
 import com.czlr.orangemarketbackend.entity.po.OrderItem;
@@ -165,39 +163,22 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
     }
 
     @Transactional
-    public PayOrderResultDTO payOrder(Long userId, Long orderId, PayOrderRequest request) {
-        String paymentMethod = requirePaymentMethod(request);
-        Order order = getOwnedOrder(userId, orderId);
-        LocalDateTime paidAt = LocalDateTime.now();
-
-        if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
-            throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "仅待付款订单可以支付");
+    public boolean markPaidIfPending(Long orderId, String paymentMethod, LocalDateTime paidAt) {
+        if (orderId == null || orderId <= 0) {
+            return false;
         }
-        if (isPaymentExpired(order, paidAt)) {
-            throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单支付已超时");
-        }
-
+        LocalDateTime paidTime = paidAt == null ? LocalDateTime.now() : paidAt;
         int updated = baseMapper.update(null, new LambdaUpdateWrapper<Order>()
                 .eq(Order::getId, orderId)
-                .eq(Order::getUserId, userId)
                 .eq(Order::getStatus, OrderStatus.PENDING_PAYMENT)
                 .and(wrapper -> wrapper
                         .isNull(Order::getPaymentExpireAt)
                         .or()
-                        .gt(Order::getPaymentExpireAt, paidAt))
+                        .gt(Order::getPaymentExpireAt, paidTime))
                 .set(Order::getStatus, OrderStatus.PENDING_SHIPMENT)
                 .set(Order::getPaymentMethod, paymentMethod)
-                .set(Order::getPaidAt, paidAt));
-        if (updated == 0) {
-            throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单状态已发生变化或支付已超时");
-        }
-
-        return new PayOrderResultDTO(
-                String.valueOf(order.getId()),
-                order.getOrderNo(),
-                OrderStatus.PENDING_SHIPMENT,
-                paymentMethod,
-                paidAt);
+                .set(Order::getPaidAt, paidTime));
+        return updated > 0;
     }
 
     @Transactional
@@ -533,19 +514,7 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
         return quantity;
     }
 
-    private String requirePaymentMethod(PayOrderRequest request) {
-        String paymentMethod = request == null ? null : request.getPaymentMethod();
-        if (paymentMethod == null || paymentMethod.isBlank()) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "paymentMethod 不能为空");
-        }
-        paymentMethod = paymentMethod.trim();
-        if (!"mock".equals(paymentMethod)) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "当前仅支持 mock 支付");
-        }
-        return paymentMethod;
-    }
-
-    private boolean isPaymentExpired(Order order, LocalDateTime now) {
+    public boolean isPaymentExpired(Order order, LocalDateTime now) {
         return order.getPaymentExpireAt() != null
                 && !order.getPaymentExpireAt().isAfter(now);
     }
@@ -567,7 +536,7 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
         }
     }
 
-    private Order getOwnedOrder(Long userId, Long orderId) {
+    public Order getOwnedOrder(Long userId, Long orderId) {
         if (orderId == null || orderId <= 0) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "orderId 参数错误");
         }

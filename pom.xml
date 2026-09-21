@@ -105,6 +105,12 @@
             <artifactId>sts20150401</artifactId>
             <version>1.1.6</version>
         </dependency>
+        <!-- 支付宝开放平台 SDK：密钥模式 RSA2 加签 + AES 内容加密 -->
+        <dependency>
+            <groupId>com.alipay.sdk</groupId>
+            <artifactId>alipay-sdk-java</artifactId>
+            <version>4.40.978.ALL</version>
+        </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>

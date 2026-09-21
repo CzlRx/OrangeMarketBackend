@@ -12,6 +12,7 @@ import com.czlr.orangemarketbackend.entity.dto.OrderPreviewDTO;
 import com.czlr.orangemarketbackend.entity.dto.PayOrderRequest;
 import com.czlr.orangemarketbackend.entity.dto.PayOrderResultDTO;
 import com.czlr.orangemarketbackend.service.OrderService;
+import com.czlr.orangemarketbackend.service.PaymentService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,9 +27,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class OrderController {
 
     private final OrderService orderService;
+    private final PaymentService paymentService;
 
-    public OrderController(OrderService orderService) {
+    public OrderController(OrderService orderService, PaymentService paymentService) {
         this.orderService = orderService;
+        this.paymentService = paymentService;
     }
 
     @PostMapping("/cart/preview")
@@ -73,15 +76,22 @@ public class OrderController {
             @RequestAttribute("userId") Long userId,
             @PathVariable Long orderId,
             @RequestBody PayOrderRequest request) {
-        return Result.success(orderService.payOrder(userId, orderId, request));
+        return Result.success(paymentService.payOrder(userId, orderId, request));
+    }
+
+    @PostMapping("/{orderId}/payment/sync")
+    public Result<PayOrderResultDTO> syncPayment(
+            @RequestAttribute("userId") Long userId,
+            @PathVariable Long orderId) {
+        return Result.success(paymentService.syncPayment(userId, orderId));
     }
 
     @PostMapping("/{orderId}/cancel")
     public Result<Void> cancelOrder(
             @RequestAttribute("userId") Long userId,
             @PathVariable Long orderId,
-            @RequestBody CancelOrderRequest request) {
-        orderService.cancelOrder(userId, orderId, request);
+            @RequestBody(required = false) CancelOrderRequest request) {
+        paymentService.cancelOrder(userId, orderId, request);
         return Result.success();
     }
 

@@ -121,7 +121,7 @@ pending_payment ──支付──► pending_shipment ──发货──► pen
         └──超时/取消                                    └──收货──► pending_review ──评价──► completed
 ```
 
-支付目前为 `mock`。延迟消息 TTL 为 30 分钟（`RabbitConfig.PAYMENT_TIMEOUT_MILLIS`）。
+支付支持支付宝当面付扫码（`alipay`）与本地 `mock`。延迟消息 TTL 为 30 分钟（`RabbitConfig.PAYMENT_TIMEOUT_MILLIS`）。超时取消前会向支付宝查单，已支付则落库为待发货。
 
 ## 接口一览
 
@@ -155,9 +155,10 @@ WebSocket 消息 `type`：`ping` / `pong` / `chat` / `connected` / `session_clai
 ```bash
 mysql -u root -p < sql/01_init.sql
 mysql -u root -p orange_market_simple < sql/create_service_tables.sql
+mysql -u root -p orange_market_simple < sql/03_payment_transaction.sql
 ```
 
-`01_init.sql` 会创建库 `orange_market_simple`、核心业务表和演示数据。客服两张表在 `create_service_tables.sql`，需要额外执行。
+`01_init.sql` 会创建库 `orange_market_simple`、核心业务表和演示数据。客服两张表在 `create_service_tables.sql`。已有库补支付流水表执行 `03_payment_transaction.sql`。
 
 演示账号（执行初始化后可用）：
 
@@ -250,6 +251,7 @@ src/main/java/com/czlr/orangemarketbackend/
 └── common/         Result、错误码、枚举
 sql/
 ├── 01_init.sql                 建库 + 核心表 + 演示数据
+├── 03_payment_transaction.sql  已有库补支付流水表
 └── create_service_tables.sql   客服会话与消息
 ```
 
