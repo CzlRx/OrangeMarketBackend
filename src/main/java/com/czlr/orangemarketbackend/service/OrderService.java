@@ -33,6 +33,8 @@ import com.czlr.orangemarketbackend.mapper.UserAddressMapper;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -43,6 +45,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -57,6 +60,7 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
     private final OrderItemMapper orderItemMapper;
     private final UserAddressMapper userAddressMapper;
     private final CartItemMapper cartItemMapper;
+    private final ProductService productService;
     private final RabbitTemplate rabbitTemplate;
 
     public OrderService(
@@ -64,11 +68,13 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
             OrderItemMapper orderItemMapper,
             UserAddressMapper userAddressMapper,
             CartItemMapper cartItemMapper,
+            ProductService productService,
             RabbitTemplate rabbitTemplate) {
         this.productMapper = productMapper;
         this.orderItemMapper = orderItemMapper;
         this.userAddressMapper = userAddressMapper;
         this.cartItemMapper = cartItemMapper;
+        this.productService = productService;
         this.rabbitTemplate = rabbitTemplate;
     }
 
@@ -130,12 +136,22 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
     }
 
     public OrderPageDTO getOrders(Long userId, String status, int page, int pageSize) {
+        return queryOrders(userId, status, page, pageSize);
+    }
+
+    public OrderPageDTO listAllOrders(String status, int page, int pageSize) {
+        return queryOrders(null, status, page, pageSize);
+    }
+
+    private OrderPageDTO queryOrders(Long userId, String status, int page, int pageSize) {
         validatePage(page, pageSize);
         OrderStatus orderStatus = parseOrderStatus(status);
         LambdaQueryWrapper<Order> query = new LambdaQueryWrapper<Order>()
-                .eq(Order::getUserId, userId)
                 .orderByDesc(Order::getCreatedAt)
                 .orderByDesc(Order::getId);
+        if (userId != null) {
+            query.eq(Order::getUserId, userId);
+        }
         if (orderStatus != null) {
             query.eq(Order::getStatus, orderStatus);
         }
@@ -178,7 +194,18 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
                 .set(Order::getStatus, OrderStatus.PENDING_SHIPMENT)
                 .set(Order::getPaymentMethod, paymentMethod)
                 .set(Order::getPaidAt, paidTime));
-        return updated > 0;
+        if (updated == 0) {
+            return false;
+        }
+        List<OrderItem> items = getOrderItems(orderId);
+        for (OrderItem item : items) {
+            if (item.getProductId() == null || item.getQuantity() == null || item.getQuantity() < 1) {
+                continue;
+            }
+            productMapper.increaseSales(item.getProductId(), item.getQuantity());
+        }
+        invalidateProductCaches(items.stream().map(OrderItem::getProductId).toList());
+        return true;
     }
 
     @Transactional
@@ -200,14 +227,8 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
             throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单状态已发生变化");
         }
 
-        for (OrderItem item : getOrderItems(order.getId())) {
-            if (item.getProductId() == null || item.getQuantity() == null || item.getQuantity() < 1) {
-                continue;
-            }
-            if (productMapper.increaseStock(item.getProductId(), item.getQuantity()) == 0) {
-                throw new BusinessException(ResultCode.CONFLICT, "库存恢复失败");
-            }
-        }
+        List<OrderItem> items = getOrderItems(order.getId());
+        restoreStock(items);
     }
 
     @Transactional
@@ -227,14 +248,7 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
             return;
         }
 
-        for (OrderItem item : getOrderItems(orderId)) {
-            if (item.getProductId() == null || item.getQuantity() == null || item.getQuantity() < 1) {
-                continue;
-            }
-            if (productMapper.increaseStock(item.getProductId(), item.getQuantity()) == 0) {
-                throw new BusinessException(ResultCode.CONFLICT, "库存恢复失败");
-            }
-        }
+        restoreStock(getOrderItems(orderId));
     }
 
     @Transactional
@@ -355,6 +369,37 @@ public class OrderService  extends ServiceImpl<OrderMapper, Order> {
             if (updated == 0) {
                 throw new BusinessException(ResultCode.CONFLICT, "商品库存不足");
             }
+        }
+        invalidateProductCaches(lines.stream().map(line -> line.product().getId()).toList());
+    }
+
+    private void restoreStock(List<OrderItem> items) {
+        for (OrderItem item : items) {
+            if (item.getProductId() == null || item.getQuantity() == null || item.getQuantity() < 1) {
+                continue;
+            }
+            if (productMapper.increaseStock(item.getProductId(), item.getQuantity()) == 0) {
+                throw new BusinessException(ResultCode.CONFLICT, "库存恢复失败");
+            }
+        }
+        invalidateProductCaches(items.stream().map(OrderItem::getProductId).toList());
+    }
+
+    private void invalidateProductCaches(List<Long> productIds) {
+        List<Long> ids = productIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return;
+        }
+        Runnable invalidate = () -> ids.forEach(productService::invalidateProductCaches);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    invalidate.run();
+                }
+            });
+        } else {
+            invalidate.run();
         }
     }
 

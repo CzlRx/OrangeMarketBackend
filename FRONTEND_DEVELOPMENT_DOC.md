@@ -1083,7 +1083,40 @@ Query：`page`(默认 1)、`pageSize`(默认 10，最大 50)。按搜索时间�
 
 ### I. 管理端（需 `admin` 或 `ADMIN` 角色，普通用户 → `40300 无权访问该资源`）
 
-#### I1. 订单发货 `POST /api/admin/orders/{orderId}/ship`
+#### I1. 待发货订单列表 `GET /api/admin/orders`
+
+Query 参数：
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- | --- |
+| `status` | string | 否 | `pending_shipment` | 见 `OrderStatus`；空白时按待发货查询 |
+| `page` | int | 否 | 1 | >=1 |
+| `pageSize` | int | 否 | 10 | 1~50 |
+
+- 非法 status → `40000 订单状态参数错误`。
+- 查询全站订单，不按当前用户过滤。按创建时间倒序。每个订单带 `items` 与收货地址快照。
+- 发货工作台应固定传 `status=pending_shipment`。
+
+响应 `data`（`PageData<Order>`，元素结构见第 6 节 `Order`）：
+
+```json
+{
+  "list": [
+    {
+      "id": "60002", "orderNo": "OM2026090812000012346", "status": "pending_shipment",
+      "items": [ { "id": "80002", "productId": "90001", "productName": "橙子蓝牙耳机", "productImage": "https://example.com/1.jpg", "unitPrice": 199.00, "quantity": 1, "lineAmount": 199.00 } ],
+      "address": { "receiver": "张三", "phone": "138****0001", "province": "北京市", "city": "北京市", "district": "朝阳区", "detail": "xx路1号" },
+      "subtotal": 199.00, "shippingFee": 0.00, "total": 199.00,
+      "buyerRemark": null, "paymentMethod": "alipay", "trackingNo": null,
+      "createdAt": "2026-09-08T12:00:00", "paymentExpireAt": null,
+      "paidAt": "2026-09-08T12:05:00", "shippedAt": null, "receivedAt": null, "completedAt": null, "cancelledAt": null
+    }
+  ],
+  "total": 1, "page": 1, "pageSize": 10, "hasMore": false
+}
+```
+
+#### I2. 订单发货 `POST /api/admin/orders/{orderId}/ship`
 
 请求体（`ShipOrderRequest`）：
 
@@ -1103,7 +1136,7 @@ Query：`page`(默认 1)、`pageSize`(默认 10，最大 50)。按搜索时间�
 { "orderId": "60001", "orderNo": "OM2026090812000012345", "status": "pending_receipt", "trackingNo": "SF1234567890", "shippedAt": "2026-09-08T13:00:00" }
 ```
 
-#### I2. 封禁用户 `PUT /api/admin/users/{userId}/ban`
+#### I3. 封禁用户 `PUT /api/admin/users/{userId}/ban`
 
 无请求体。规则：
 
@@ -1144,7 +1177,7 @@ Query：`page`(默认 1)、`pageSize`(默认 10，最大 50)。按搜索时间�
 | 状态 | 前端操作 | 对应接口 |
 | --- | --- | --- |
 | `pending_payment` | 去支付 / 取消订单；显示支付倒计时（用 `paymentExpireAt`） | E6 / E7 |
-| `pending_shipment` | 等待发货，展示支付方式 | - |
+| `pending_shipment` | 用户等待发货；管理端从待发货列表点选发货 | I1 / I2 |
 | `pending_receipt` | 确认收货；展示 `trackingNo` | E8 |
 | `pending_review` | 去评价（入口数据来自 H1） | H2 |
 | `completed` | 无操作（可再次查看、评价已提交） | - |
@@ -1249,7 +1282,7 @@ http.interceptors.response.use(
 
 - 用响应里的 `page` / `pageSize` / `hasMore` / `total` 驱动。
 - 刷新/切换筛选时重置 `page=1`；`hasMore=false` 时停止加载。
-- 商品列表注意服务端有缓存：修改数据后可能 5 分钟内不更新。
+- 商品列表/详情默认缓存 5 分钟；下单扣库存、支付增加销量、取消恢复库存后会立即清缓存。
 
 ### 登录态与用户信息
 

@@ -19,6 +19,10 @@ public interface ProductMapper extends BaseMapper<Product> {
             + "WHERE id = #{productId} AND deleted_at = 0")
     int increaseStock(@Param("productId") Long productId, @Param("quantity") Integer quantity);
 
+    @Update("UPDATE product SET sales_count = COALESCE(sales_count, 0) + #{quantity} "
+            + "WHERE id = #{productId} AND deleted_at = 0")
+    int increaseSales(@Param("productId") Long productId, @Param("quantity") Integer quantity);
+
     @Update("UPDATE product SET "
             + "rating_avg = ROUND((COALESCE(rating_avg, 0) * COALESCE(review_count, 0) "
             + "+ #{ratingSum}) / (COALESCE(review_count, 0) + #{reviewCount}), 2), "

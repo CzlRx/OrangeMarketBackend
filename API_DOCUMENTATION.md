@@ -1265,7 +1265,7 @@ POST /api/orders/{orderId}/reviews
 
 - 游客：图形验证码、短信发送、登录、分类、商品列表、商品详情、商品评价列表
 - 登录用户：当前用户、购物车、地址、收藏、浏览足迹、搜索历史、结算、订单、支付、确认收货、提交评价、OSS 签名直传（头像）
-- 管理员：发货、封禁用户、更新商品图片、签发商品图上传
+- 管理员：待发货订单列表、发货、封禁用户、更新商品图片、签发商品图上传
 - 游客购物车、搜索历史：由前端本地保存
 - 商品、分类数据：分类与商品主数据仍通过 SQL 维护；商品图片可通过管理端接口更新
 
@@ -1273,7 +1273,22 @@ POST /api/orders/{orderId}/reviews
 
 管理端接口仍使用 Bearer Token 鉴权，并额外要求当前用户的 `role` 为 `admin` 或 `ADMIN` 且 `status=active`。管理员账号不单独建表，直接在 `user_account` 中维护。
 
-### 12.1 管理员发货
+### 12.1 待发货订单列表
+
+```http
+GET /api/admin/orders?status=pending_shipment&page=1&pageSize=10
+Authorization: Bearer <admin-token>
+```
+
+查询参数：
+
+- `status`：可选，默认 `pending_shipment`；非法值返回 `40000 订单状态参数错误`
+- `page`：默认 `1`
+- `pageSize`：默认 `10`，最大 `50`
+
+与用户端订单列表不同，该接口查询全站订单，不按 `userId` 过滤。响应结构与 `GET /api/orders` 相同（`list` / `total` / `page` / `pageSize` / `hasMore`），每条订单含商品行、收货地址快照、金额和 `paidAt`。
+
+### 12.2 管理员发货
 
 ```http
 POST /api/admin/orders/{orderId}/ship
@@ -1305,7 +1320,7 @@ Content-Type: application/json
 
 订单不存在返回 `40400`，订单不是待发货状态返回 `42200`，物流单号为空或超过 128 个字符返回 `40000`。
 
-### 12.2 封禁用户
+### 12.3 封禁用户
 
 ```http
 PUT /api/admin/users/{userId}/ban
@@ -1326,7 +1341,7 @@ Authorization: Bearer <admin-token>
 
 非管理员访问管理端接口返回 `40300`。
 
-### 12.3 更新商品图片
+### 12.4 更新商品图片
 
 ```http
 PUT /api/admin/products/{productId}/images
