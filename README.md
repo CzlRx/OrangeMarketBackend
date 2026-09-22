@@ -156,9 +156,10 @@ WebSocket 消息 `type`：`ping` / `pong` / `chat` / `connected` / `session_clai
 mysql -u root -p < sql/01_init.sql
 mysql -u root -p orange_market_simple < sql/create_service_tables.sql
 mysql -u root -p orange_market_simple < sql/03_payment_transaction.sql
+mysql -u root -p orange_market_simple < sql/04_alipay_one_cent_test_product.sql
 ```
 
-`01_init.sql` 会创建库 `orange_market_simple`、核心业务表和演示数据。客服两张表在 `create_service_tables.sql`。已有库补支付流水表执行 `03_payment_transaction.sql`。
+`01_init.sql` 会创建库 `orange_market_simple`、核心业务表和演示数据（含支付宝一分钱测试商品）。客服两张表在 `create_service_tables.sql`。已有库补支付流水表执行 `03_payment_transaction.sql`。已有库补一分钱测试商品执行 `04_alipay_one_cent_test_product.sql`（商品 ID `21999`，售价 `0.01` 元、包邮）。
 
 演示账号（执行初始化后可用）：
 
@@ -250,9 +251,10 @@ src/main/java/com/czlr/orangemarketbackend/
 ├── consumer/       订单超时取消
 └── common/         Result、错误码、枚举
 sql/
-├── 01_init.sql                 建库 + 核心表 + 演示数据
-├── 03_payment_transaction.sql  已有库补支付流水表
-└── create_service_tables.sql   客服会话与消息
+├── 01_init.sql                         建库 + 核心表 + 演示数据
+├── 03_payment_transaction.sql          已有库补支付流水表
+├── 04_alipay_one_cent_test_product.sql 已有库补支付宝一分钱测试商品
+└── create_service_tables.sql           客服会话与消息
 ```
 
 ## 相关仓库

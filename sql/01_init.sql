@@ -744,6 +744,14 @@ VALUES
  'https://picsum.photos/seed/om-offsale/800/800',
  JSON_ARRAY('https://picsum.photos/seed/om-offsale/800/800'),
  NULL, 199.00, 299.00, 8.00, 0, 520, 4.20, 18,
- JSON_ARRAY('下架'), 'off_sale', 910);
+ JSON_ARRAY('下架'), 'off_sale', 910),
+
+-- ========== 支付宝联调：一分钱测试商品（包邮，实付 0.01 元） ==========
+(21999, @digital_category_id, '支付宝一分钱测试商品', '仅用于当面付联调，实付 0.01 元',
+ '包邮测试商品：售价 0.01 元、运费 0 元，下单后订单总额为 0.01 元，便于真实支付宝当面付扫码联调。库存充足，可反复下单。请勿作为正式商品售卖。',
+ 'https://picsum.photos/seed/om-alipay-fen/800/800',
+ JSON_ARRAY('https://picsum.photos/seed/om-alipay-fen/800/800'),
+ NULL, 0.01, 0.01, 0.00, 9999, 0, 0.00, 0,
+ JSON_ARRAY('测试', '支付宝'), 'on_sale', 1);
 
 COMMIT;
