@@ -354,18 +354,20 @@ public class PaymentService {
             }
             return;
         }
-        CloseOutcome closeOutcome = alipayTradeClient.close(pending.getOutTradeNo());
-        if (closeOutcome == CloseOutcome.ALREADY_PAID) {
-            QueryResult paid = alipayTradeClient.query(pending.getOutTradeNo());
-            settleIfPaid(
-                    pending,
-                    firstNonBlank(paid.tradeNo(), queried.tradeNo()),
-                    firstNonBlank(paid.buyerLogonId(), queried.buyerLogonId()),
-                    firstNonBlank(paid.totalAmount(), queried.totalAmount()));
-            if (failIfAlreadyPaid) {
-                throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单已支付，无法取消");
+        if (!queried.notFound() && !queried.isClosed()) {
+            CloseOutcome closeOutcome = alipayTradeClient.close(pending.getOutTradeNo());
+            if (closeOutcome == CloseOutcome.ALREADY_PAID) {
+                QueryResult paid = alipayTradeClient.query(pending.getOutTradeNo());
+                settleIfPaid(
+                        pending,
+                        firstNonBlank(paid.tradeNo(), queried.tradeNo()),
+                        firstNonBlank(paid.buyerLogonId(), queried.buyerLogonId()),
+                        firstNonBlank(paid.totalAmount(), queried.totalAmount()));
+                if (failIfAlreadyPaid) {
+                    throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单已支付，无法取消");
+                }
+                return;
             }
-            return;
         }
         pending.setStatus(PaymentStatus.CANCELLED);
         paymentTransactionMapper.updateById(pending);
@@ -411,15 +413,17 @@ public class PaymentService {
             settleIfPaid(pending, queried.tradeNo(), queried.buyerLogonId(), queried.totalAmount());
             throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单已支付");
         }
-        CloseOutcome closeOutcome = alipayTradeClient.close(pending.getOutTradeNo());
-        if (closeOutcome == CloseOutcome.ALREADY_PAID) {
-            QueryResult paid = alipayTradeClient.query(pending.getOutTradeNo());
-            settleIfPaid(
-                    pending,
-                    firstNonBlank(paid.tradeNo(), queried.tradeNo()),
-                    firstNonBlank(paid.buyerLogonId(), queried.buyerLogonId()),
-                    firstNonBlank(paid.totalAmount(), queried.totalAmount()));
-            throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单已支付");
+        if (!queried.notFound() && !queried.isClosed()) {
+            CloseOutcome closeOutcome = alipayTradeClient.close(pending.getOutTradeNo());
+            if (closeOutcome == CloseOutcome.ALREADY_PAID) {
+                QueryResult paid = alipayTradeClient.query(pending.getOutTradeNo());
+                settleIfPaid(
+                        pending,
+                        firstNonBlank(paid.tradeNo(), queried.tradeNo()),
+                        firstNonBlank(paid.buyerLogonId(), queried.buyerLogonId()),
+                        firstNonBlank(paid.totalAmount(), queried.totalAmount()));
+                throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单已支付");
+            }
         }
         pending.setStatus(PaymentStatus.FAILED);
         paymentTransactionMapper.updateById(pending);

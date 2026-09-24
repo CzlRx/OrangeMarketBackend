@@ -21,10 +21,15 @@ import com.alipay.api.response.AlipayTradeWapPayResponse;
 import com.czlr.orangemarketbackend.common.ResultCode;
 import com.czlr.orangemarketbackend.common.exception.BusinessException;
 import com.czlr.orangemarketbackend.config.AlipayProperties;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+@Slf4j
 @Component
 public class AlipayTradeClient {
+
+    private static final int GATEWAY_ATTEMPTS = 3;
+    private static final long GATEWAY_RETRY_DELAY_MS = 300;
 
     public static final String TRADE_SUCCESS = "TRADE_SUCCESS";
     public static final String TRADE_FINISHED = "TRADE_FINISHED";
@@ -65,12 +70,7 @@ public class AlipayTradeClient {
             model.setQrCodeTimeoutExpress(qrCodeTimeoutExpress);
         }
         request.setBizModel(model);
-        AlipayTradePrecreateResponse response;
-        try {
-            response = client().execute(request);
-        } catch (AlipayApiException e) {
-            throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "支付宝预下单失败");
-        }
+        AlipayTradePrecreateResponse response = execute("支付宝预下单失败", () -> client().execute(request));
         if (response == null || !response.isSuccess() || isBlank(response.getQrCode())) {
             throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, precreateError(response));
         }
@@ -157,12 +157,7 @@ public class AlipayTradeClient {
         AlipayTradeQueryModel model = new AlipayTradeQueryModel();
         model.setOutTradeNo(outTradeNo);
         request.setBizModel(model);
-        AlipayTradeQueryResponse response;
-        try {
-            response = client().execute(request);
-        } catch (AlipayApiException e) {
-            throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "支付宝查单失败");
-        }
+        AlipayTradeQueryResponse response = execute("支付宝查单失败", () -> client().execute(request));
         if (response == null) {
             throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "支付宝查单失败");
         }
@@ -186,13 +181,8 @@ public class AlipayTradeClient {
         AlipayTradeCloseModel model = new AlipayTradeCloseModel();
         model.setOutTradeNo(outTradeNo);
         request.setBizModel(model);
-        AlipayTradeCloseResponse response;
-        try {
-            response = client().execute(request);
-        } catch (AlipayApiException e) {
-            throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "支付宝关单失败");
-        }
-        if (response != null && response.isSuccess()) {
+        AlipayTradeCloseResponse response = execute("支付宝关单失败", () -> client().execute(request));
+        if (response != null && (response.isSuccess() || TRADE_NOT_EXIST.equals(response.getSubCode()))) {
             return CloseOutcome.CLOSED;
         }
         QueryResult queried = query(outTradeNo);
@@ -203,6 +193,36 @@ public class AlipayTradeClient {
             return CloseOutcome.CLOSED;
         }
         throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, closeError(response));
+    }
+
+    private <T> T execute(String failureMessage, AlipayCall<T> call) {
+        AlipayApiException last = null;
+        for (int attempt = 1; attempt <= GATEWAY_ATTEMPTS; attempt++) {
+            try {
+                return call.get();
+            } catch (AlipayApiException e) {
+                last = e;
+                if (attempt == GATEWAY_ATTEMPTS) {
+                    break;
+                }
+                log.warn("支付宝网关通信失败，准备重试 attempt={} message={}", attempt, e.getMessage());
+                if (!pauseBeforeRetry()) {
+                    break;
+                }
+            }
+        }
+        log.warn("支付宝网关通信失败 message={}", last == null ? null : last.getErrMsg(), last);
+        throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, failureMessage);
+    }
+
+    private static boolean pauseBeforeRetry() {
+        try {
+            Thread.sleep(GATEWAY_RETRY_DELAY_MS);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private AlipayClient client() {
@@ -257,6 +277,11 @@ public class AlipayTradeClient {
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    @FunctionalInterface
+    private interface AlipayCall<T> {
+        T get() throws AlipayApiException;
     }
 
     public enum CloseOutcome {
