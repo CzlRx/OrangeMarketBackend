@@ -43,6 +43,8 @@ public class PaymentService {
 
     public static final String CHANNEL_MOCK = "mock";
     public static final String CHANNEL_ALIPAY = "alipay";
+    public static final String TRADE_QR = "qr";
+    public static final String TRADE_WAP = "wap";
 
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter ALIPAY_EXPIRE_FORMATTER =
@@ -88,6 +90,10 @@ public class PaymentService {
         if (CHANNEL_MOCK.equals(paymentMethod)) {
             return payByMock(order, now);
         }
+        String tradeType = requireTradeType(request);
+        if (TRADE_WAP.equals(tradeType)) {
+            return payByAlipayWap(order);
+        }
         return payByAlipay(order, now);
     }
 
@@ -121,7 +127,17 @@ public class PaymentService {
                     success == null ? pending.getQrCode() : success.getQrCode(),
                     pending.getOutTradeNo());
         }
-        return toResult(order, CHANNEL_ALIPAY, null, pending.getQrCode(), pending.getOutTradeNo());
+        String payUrl = null;
+        if (isBlank(pending.getQrCode())) {
+            payUrl = alipayTradeClient.wapPay(
+                    pending.getOutTradeNo(),
+                    scaleAmount(order.getTotalAmount()).toPlainString(),
+                    buildSubject(order.getId()),
+                    formatExpire(order.getPaymentExpireAt()),
+                    alipayNotifyUrl(),
+                    alipayProperties.returnUrlFor(order.getId()));
+        }
+        return toResult(order, CHANNEL_ALIPAY, null, pending.getQrCode(), pending.getOutTradeNo(), payUrl);
     }
 
     public String handleAlipayNotify(HttpServletRequest request) {
@@ -203,6 +219,47 @@ public class PaymentService {
         return toResult(order, CHANNEL_MOCK, paidAt, null, transaction.getOutTradeNo());
     }
 
+    private PayOrderResultDTO payByAlipayWap(Order order) {
+        if (!alipayProperties.isConfigured()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "支付宝未配置");
+        }
+        PaymentTransaction pending = findPendingAlipay(order.getId());
+        if (pending != null && !isBlank(pending.getQrCode())) {
+            retirePending(pending);
+            pending = null;
+        }
+        boolean created = pending == null;
+        String outTradeNo;
+        if (pending == null) {
+            outTradeNo = nextOutTradeNo(order.getId());
+            pending = new PaymentTransaction();
+            pending.setOrderId(order.getId());
+            pending.setOutTradeNo(outTradeNo);
+            pending.setChannel(CHANNEL_ALIPAY);
+            pending.setStatus(PaymentStatus.PENDING);
+            pending.setAmount(scaleAmount(order.getTotalAmount()));
+            paymentTransactionMapper.insert(pending);
+        } else {
+            outTradeNo = pending.getOutTradeNo();
+        }
+        try {
+            String payUrl = alipayTradeClient.wapPay(
+                    outTradeNo,
+                    scaleAmount(order.getTotalAmount()).toPlainString(),
+                    buildSubject(order.getId()),
+                    formatExpire(order.getPaymentExpireAt()),
+                    alipayNotifyUrl(),
+                    alipayProperties.returnUrlFor(order.getId()));
+            return toResult(order, CHANNEL_ALIPAY, null, null, outTradeNo, payUrl);
+        } catch (RuntimeException e) {
+            if (created) {
+                pending.setStatus(PaymentStatus.FAILED);
+                paymentTransactionMapper.updateById(pending);
+            }
+            throw e;
+        }
+    }
+
     private PayOrderResultDTO payByAlipay(Order order, LocalDateTime now) {
         if (!alipayProperties.isConfigured()) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "支付宝未配置");
@@ -212,8 +269,7 @@ public class PaymentService {
             return toResult(order, CHANNEL_ALIPAY, null, pending.getQrCode(), pending.getOutTradeNo());
         }
         if (pending != null) {
-            pending.setStatus(PaymentStatus.FAILED);
-            paymentTransactionMapper.updateById(pending);
+            retirePending(pending);
         }
 
         String outTradeNo = nextOutTradeNo(order.getId());
@@ -225,7 +281,7 @@ public class PaymentService {
         transaction.setAmount(scaleAmount(order.getTotalAmount()));
         paymentTransactionMapper.insert(transaction);
 
-        String notifyUrl = alipayProperties.hasUsableNotifyUrl() ? alipayProperties.getNotifyUrl() : null;
+        String notifyUrl = alipayNotifyUrl();
         try {
             PrecreateResult result = alipayTradeClient.precreate(
                     outTradeNo,
@@ -333,6 +389,42 @@ public class PaymentService {
         throw new BusinessException(ResultCode.BAD_REQUEST, "当前仅支持 alipay 或 mock 支付");
     }
 
+    private String requireTradeType(PayOrderRequest request) {
+        String tradeType = request == null ? null : request.getTradeType();
+        if (tradeType == null || tradeType.isBlank()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "请选择当面扫码或手机网站支付");
+        }
+        tradeType = tradeType.trim().toLowerCase(Locale.ROOT);
+        if (TRADE_QR.equals(tradeType) || TRADE_WAP.equals(tradeType)) {
+            return tradeType;
+        }
+        throw new BusinessException(ResultCode.BAD_REQUEST, "tradeType 仅支持 qr 或 wap");
+    }
+
+    private String alipayNotifyUrl() {
+        return alipayProperties.hasUsableNotifyUrl() ? alipayProperties.getNotifyUrl() : null;
+    }
+
+    private void retirePending(PaymentTransaction pending) {
+        QueryResult queried = alipayTradeClient.query(pending.getOutTradeNo());
+        if (queried.isPaid()) {
+            settleIfPaid(pending, queried.tradeNo(), queried.buyerLogonId(), queried.totalAmount());
+            throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单已支付");
+        }
+        CloseOutcome closeOutcome = alipayTradeClient.close(pending.getOutTradeNo());
+        if (closeOutcome == CloseOutcome.ALREADY_PAID) {
+            QueryResult paid = alipayTradeClient.query(pending.getOutTradeNo());
+            settleIfPaid(
+                    pending,
+                    firstNonBlank(paid.tradeNo(), queried.tradeNo()),
+                    firstNonBlank(paid.buyerLogonId(), queried.buyerLogonId()),
+                    firstNonBlank(paid.totalAmount(), queried.totalAmount()));
+            throw new BusinessException(ResultCode.BUSINESS_STATE_CONFLICT, "订单已支付");
+        }
+        pending.setStatus(PaymentStatus.FAILED);
+        paymentTransactionMapper.updateById(pending);
+    }
+
     private PaymentTransaction findPendingAlipay(Long orderId) {
         return paymentTransactionMapper.selectOne(new LambdaQueryWrapper<PaymentTransaction>()
                 .eq(PaymentTransaction::getOrderId, orderId)
@@ -407,6 +499,16 @@ public class PaymentService {
             LocalDateTime paidAt,
             String qrCode,
             String outTradeNo) {
+        return toResult(order, paymentMethod, paidAt, qrCode, outTradeNo, null);
+    }
+
+    private PayOrderResultDTO toResult(
+            Order order,
+            String paymentMethod,
+            LocalDateTime paidAt,
+            String qrCode,
+            String outTradeNo,
+            String payUrl) {
         return new PayOrderResultDTO(
                 String.valueOf(order.getId()),
                 order.getOrderNo(),
@@ -415,7 +517,8 @@ public class PaymentService {
                 paidAt,
                 qrCode,
                 outTradeNo,
-                order.getPaymentExpireAt());
+                order.getPaymentExpireAt(),
+                payUrl);
     }
 
     static Map<String, String> extractNotifyParams(HttpServletRequest request) {

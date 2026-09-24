@@ -34,6 +34,12 @@ public class AlipayProperties {
     @Value("${alipay.notify-url:}")
     private String notifyUrl;
 
+    @Value("${alipay.trade-mode:}")
+    private String tradeMode;
+
+    @Value("${alipay.return-base-url:}")
+    private String returnBaseUrl;
+
     @Value("${alipay.allow-mock:true}")
     private boolean allowMock;
 
@@ -64,6 +70,33 @@ public class AlipayProperties {
 
     public boolean isAllowMock() {
         return allowMock;
+    }
+
+    /**
+     * 沙箱网关默认走电脑网站支付，浏览器里用沙箱买家账号付款。
+     * 显式设置 precreate / page 时以配置为准。
+     */
+    public boolean isPageMode() {
+        String mode = trimToEmpty(tradeMode).toLowerCase(Locale.ROOT);
+        if ("page".equals(mode)) {
+            return true;
+        }
+        if ("precreate".equals(mode)) {
+            return false;
+        }
+        String gatewayUrl = getGateway().toLowerCase(Locale.ROOT);
+        return gatewayUrl.contains("alipaydev.com") || gatewayUrl.contains("sandbox");
+    }
+
+    public String returnUrlFor(long orderId) {
+        String base = trimToEmpty(returnBaseUrl);
+        if (base.isEmpty()) {
+            return null;
+        }
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        return base + "/payment/" + orderId + "?alipayReturn=1";
     }
 
     public boolean isConfigured() {

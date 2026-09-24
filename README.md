@@ -121,7 +121,7 @@ pending_payment ──支付──► pending_shipment ──发货──► pen
         └──超时/取消                                    └──收货──► pending_review ──评价──► completed
 ```
 
-支付支持支付宝当面付扫码（`alipay`）与本地 `mock`。延迟消息 TTL 为 30 分钟（`RabbitConfig.PAYMENT_TIMEOUT_MILLIS`）。超时取消前会向支付宝查单，已支付则落库为待发货。
+支付支持支付宝（`alipay`）与本地 `mock`。支付宝可选当面扫码（`tradeType=qr`）或手机网站支付（`tradeType=wap`）。延迟消息 TTL 为 30 分钟（`RabbitConfig.PAYMENT_TIMEOUT_MILLIS`）。超时取消前会向支付宝查单，已支付则落库为待发货。
 
 ## 接口一览
 

@@ -1083,16 +1083,17 @@ POST /api/orders/{orderId}/pay
 
 ```json
 {
-  "paymentMethod": "alipay"
+  "paymentMethod": "alipay",
+  "tradeType": "qr"
 }
 ```
 
 `paymentMethod` 允许：
 
-- `alipay`：当面付预下单（`alipay.trade.precreate`），密钥模式 RSA2 加签，`biz_content` 使用开放平台 AES 密钥加密。订单仍为 `pending_payment`，响应带 `qrCode`，前端自行展示二维码。
+- `alipay`：密钥模式 RSA2 加签，`biz_content` 使用开放平台 AES 密钥加密。订单仍为 `pending_payment`。须同时传 `tradeType`：`qr` 为当面付预下单，响应带 `qrCode`；`wap` 为手机网站支付 `alipay.trade.wap.pay`，响应带 `payUrl`。更换方式时会关闭上一笔未支付流水。
 - `mock`：仅当 `alipay.allow-mock=true` 时可用，同步把订单改为 `pending_shipment`。
 
-其它值返回 `40000`。仅 `pending_payment` 且未超过 `paymentExpireAt` 可支付。同一订单若已有未过期的 pending 支付宝流水，直接返回已有 `qrCode`，不重复预下单。
+其它值返回 `40000`。仅 `pending_payment` 且未超过 `paymentExpireAt` 可支付。同一订单若已有 pending 支付宝流水：扫码模式直接返回已有 `qrCode`；收银台模式用同一 `outTradeNo` 重新生成 `payUrl`。
 
 支付宝预下单响应 `data`：
 
@@ -1105,7 +1106,8 @@ POST /api/orders/{orderId}/pay
   "paidAt": null,
   "qrCode": "https://qr.alipay.com/baxxxx",
   "outTradeNo": "P60001T1758440000ABCD1234",
-  "expireAt": "2026-09-05T13:00:00.000Z"
+  "expireAt": "2026-09-05T13:00:00.000Z",
+  "payUrl": null
 }
 ```
 

@@ -19,4 +19,5 @@ public class PayOrderResultDTO {
     private String qrCode;
     private String outTradeNo;
     private LocalDateTime expireAt;
+    private String payUrl;
 }

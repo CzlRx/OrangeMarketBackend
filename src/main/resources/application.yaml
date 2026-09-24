@@ -71,4 +71,7 @@ alipay:
   alipay-public-key: ${ALIPAY_PUBLIC_KEY:}
   encrypt-key: ${ALIPAY_ENCRYPT_KEY:}
   notify-url: ${ALIPAY_NOTIFY_URL:}
+  # 空则按网关判断：沙箱走 page（电脑网站支付），正式环境走 precreate（当面付扫码）
+  trade-mode: ${ALIPAY_TRADE_MODE:}
+  return-base-url: ${ALIPAY_RETURN_BASE_URL:}
   allow-mock: ${ALIPAY_ALLOW_MOCK:true}

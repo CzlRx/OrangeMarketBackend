@@ -4,14 +4,20 @@ import com.alipay.api.AlipayApiException;
 import com.alipay.api.AlipayClient;
 import com.alipay.api.DefaultAlipayClient;
 import com.alipay.api.domain.AlipayTradeCloseModel;
+import com.alipay.api.domain.AlipayTradePagePayModel;
 import com.alipay.api.domain.AlipayTradePrecreateModel;
 import com.alipay.api.domain.AlipayTradeQueryModel;
+import com.alipay.api.domain.AlipayTradeWapPayModel;
 import com.alipay.api.request.AlipayTradeCloseRequest;
+import com.alipay.api.request.AlipayTradePagePayRequest;
 import com.alipay.api.request.AlipayTradePrecreateRequest;
 import com.alipay.api.request.AlipayTradeQueryRequest;
+import com.alipay.api.request.AlipayTradeWapPayRequest;
 import com.alipay.api.response.AlipayTradeCloseResponse;
+import com.alipay.api.response.AlipayTradePagePayResponse;
 import com.alipay.api.response.AlipayTradePrecreateResponse;
 import com.alipay.api.response.AlipayTradeQueryResponse;
+import com.alipay.api.response.AlipayTradeWapPayResponse;
 import com.czlr.orangemarketbackend.common.ResultCode;
 import com.czlr.orangemarketbackend.common.exception.BusinessException;
 import com.czlr.orangemarketbackend.config.AlipayProperties;
@@ -24,6 +30,8 @@ public class AlipayTradeClient {
     public static final String TRADE_FINISHED = "TRADE_FINISHED";
     public static final String TRADE_NOT_EXIST = "ACQ.TRADE_NOT_EXIST";
     public static final String FACE_TO_FACE_PRODUCT_CODE = "FACE_TO_FACE_PAYMENT";
+    public static final String PAGE_PAY_PRODUCT_CODE = "FAST_INSTANT_TRADE_PAY";
+    public static final String WAP_PAY_PRODUCT_CODE = "QUICK_WAP_WAY";
 
     private final AlipayProperties properties;
     private final Object clientLock = new Object();
@@ -67,6 +75,80 @@ public class AlipayTradeClient {
             throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, precreateError(response));
         }
         return new PrecreateResult(response.getOutTradeNo(), response.getQrCode());
+    }
+
+    public String pagePay(
+            String outTradeNo,
+            String totalAmount,
+            String subject,
+            String timeExpire,
+            String notifyUrl,
+            String returnUrl) {
+        AlipayTradePagePayRequest request = new AlipayTradePagePayRequest();
+        if (notifyUrl != null && !notifyUrl.isBlank()) {
+            request.setNotifyUrl(notifyUrl);
+        }
+        if (returnUrl != null && !returnUrl.isBlank()) {
+            request.setReturnUrl(returnUrl);
+        }
+        request.setNeedEncrypt(true);
+        AlipayTradePagePayModel model = new AlipayTradePagePayModel();
+        model.setOutTradeNo(outTradeNo);
+        model.setTotalAmount(totalAmount);
+        model.setSubject(subject);
+        model.setProductCode(PAGE_PAY_PRODUCT_CODE);
+        if (timeExpire != null && !timeExpire.isBlank()) {
+            model.setTimeExpire(timeExpire);
+        }
+        request.setBizModel(model);
+        AlipayTradePagePayResponse response;
+        try {
+            response = client().pageExecute(request, "GET");
+        } catch (AlipayApiException e) {
+            throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "支付宝收银台下单失败");
+        }
+        String payUrl = response == null ? null : response.getBody();
+        if (isBlank(payUrl) || !payUrl.startsWith("http")) {
+            throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "支付宝收银台下单失败");
+        }
+        return payUrl;
+    }
+
+    public String wapPay(
+            String outTradeNo,
+            String totalAmount,
+            String subject,
+            String timeExpire,
+            String notifyUrl,
+            String returnUrl) {
+        AlipayTradeWapPayRequest request = new AlipayTradeWapPayRequest();
+        if (notifyUrl != null && !notifyUrl.isBlank()) {
+            request.setNotifyUrl(notifyUrl);
+        }
+        if (returnUrl != null && !returnUrl.isBlank()) {
+            request.setReturnUrl(returnUrl);
+        }
+        request.setNeedEncrypt(true);
+        AlipayTradeWapPayModel model = new AlipayTradeWapPayModel();
+        model.setOutTradeNo(outTradeNo);
+        model.setTotalAmount(totalAmount);
+        model.setSubject(subject);
+        model.setProductCode(WAP_PAY_PRODUCT_CODE);
+        if (timeExpire != null && !timeExpire.isBlank()) {
+            model.setTimeExpire(timeExpire);
+        }
+        request.setBizModel(model);
+        AlipayTradeWapPayResponse response;
+        try {
+            response = client().pageExecute(request, "GET");
+        } catch (AlipayApiException e) {
+            throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "支付宝手机网站支付下单失败");
+        }
+        String payUrl = response == null ? null : response.getBody();
+        if (isBlank(payUrl) || !payUrl.startsWith("http")) {
+            throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR, "支付宝手机网站支付下单失败");
+        }
+        return payUrl;
     }
 
     public QueryResult query(String outTradeNo) {
